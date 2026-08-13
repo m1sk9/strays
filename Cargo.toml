@@ -1,0 +1,9 @@
+[package]
+name = "strays"
+version = "0.0.0"
+edition = "2024"
+description = "A TUI for Centralized Management of LLM Agents Running on Machines."
+license = "MIT"
+repository = "https://github.com/m1sk9/strays"
+
+[dependencies]
