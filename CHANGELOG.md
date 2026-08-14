@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/m1sk9/strays/compare/v0.1.0...v0.2.0) (2026-08-14)
+
+
+### Features
+
+* add --version and --help flags ([#12](https://github.com/m1sk9/strays/issues/12)) ([35b19fe](https://github.com/m1sk9/strays/commit/35b19fe91ce8d64dae47f5a2fb2857091a341b87))
+
 ## 0.1.0 (2026-08-14)
 
 
