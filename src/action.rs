@@ -23,3 +23,14 @@ pub fn kill(pid: u32) -> io::Result<ExitStatus> {
         .args(["-TERM", &pid.to_string()])
         .status()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kill_refuses_pid_zero_without_signaling_anything() {
+        let err = kill(0).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+}

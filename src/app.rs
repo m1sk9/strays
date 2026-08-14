@@ -253,6 +253,19 @@ mod tests {
     }
 
     #[test]
+    fn confirm_kill_without_pid_does_nothing() {
+        let mut app = App::new();
+        app.sessions = vec![session("a")];
+        app.selected_session_id = Some("a".to_string());
+        app.mode = Mode::ConfirmKill;
+
+        app.confirm_kill();
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.status_message.is_none());
+    }
+
+    #[test]
     fn cancel_kill_returns_to_normal_mode() {
         let mut app = App::new();
         app.mode = Mode::ConfirmKill;

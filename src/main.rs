@@ -38,27 +38,50 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     Ok(())
 }
 
-/// Runs `claude` in place of the current process (attach when `fork` is false,
-/// fork the resumed session otherwise). Only returns to the TUI if exec itself
-/// failed to start `claude`, or if the session can't be opened this way at all.
-fn attach_or_fork(terminal: &mut DefaultTerminal, app: &mut App, fork: bool) -> io::Result<()> {
+#[derive(Debug)]
+enum AttachOutcome {
+    NoSelection,
+    Unavailable(&'static str),
+    Ready(std::process::Command),
+}
+
+/// Decides what attaching/forking the selected session should do, without
+/// touching the terminal — kept separate from `attach_or_fork` so this can be
+/// tested without a real `DefaultTerminal` (`ratatui::init()` needs a real TTY).
+fn resolve_attach_or_fork(app: &App, fork: bool) -> AttachOutcome {
     let Some(session) = app.selected_session() else {
-        app.status_message = Some("no session selected".to_string());
-        return Ok(());
+        return AttachOutcome::NoSelection;
     };
+
     let command = if fork {
         app.fork_command(session)
     } else {
         app.attach_command(session)
     };
-    let Some(command) = command else {
-        app.status_message = Some(if fork {
-            "cannot fork: unrecognized session kind".to_string()
-        } else {
-            "cannot attach: session is interactive elsewhere (needs a pane manager like herdr, not yet supported)"
-                .to_string()
-        });
-        return Ok(());
+
+    match command {
+        Some(command) => AttachOutcome::Ready(command),
+        None if fork => AttachOutcome::Unavailable("cannot fork: unrecognized session kind"),
+        None => AttachOutcome::Unavailable(
+            "cannot attach: session is interactive elsewhere (needs a pane manager like herdr, not yet supported)",
+        ),
+    }
+}
+
+/// Runs `claude` in place of the current process (attach when `fork` is false,
+/// fork the resumed session otherwise). Only returns to the TUI if exec itself
+/// failed to start `claude`, or if the session can't be opened this way at all.
+fn attach_or_fork(terminal: &mut DefaultTerminal, app: &mut App, fork: bool) -> io::Result<()> {
+    let command = match resolve_attach_or_fork(app, fork) {
+        AttachOutcome::NoSelection => {
+            app.status_message = Some("no session selected".to_string());
+            return Ok(());
+        }
+        AttachOutcome::Unavailable(message) => {
+            app.status_message = Some(message.to_string());
+            return Ok(());
+        }
+        AttachOutcome::Ready(command) => command,
     };
 
     ratatui::restore();
@@ -236,5 +259,82 @@ mod tests {
         handle_key(&mut app, key(KeyCode::Esc));
 
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    fn session_with_kind(id: &str, kind: SessionKind) -> Session {
+        Session {
+            id: id.to_string(),
+            session_id: id.to_string(),
+            cwd: PathBuf::from("/tmp"),
+            kind,
+            started_at: 0,
+            name: "name".to_string(),
+            state: None,
+            pid: None,
+            status: None,
+        }
+    }
+
+    fn args_of(command: &std::process::Command) -> Vec<&str> {
+        command.get_args().map(|a| a.to_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_has_no_selection_without_sessions() {
+        let app = App::new();
+        assert!(matches!(
+            resolve_attach_or_fork(&app, false),
+            AttachOutcome::NoSelection
+        ));
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_attaches_background_sessions() {
+        let mut app = App::new();
+        app.sessions = vec![session_with_kind("a", SessionKind::Background)];
+        handle_key(&mut app, key(KeyCode::Char('j')));
+
+        match resolve_attach_or_fork(&app, false) {
+            AttachOutcome::Ready(command) => assert_eq!(args_of(&command), ["attach", "a"]),
+            other => panic!("expected Ready, got a different outcome: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_refuses_attach_for_interactive_sessions() {
+        let mut app = App::new();
+        app.sessions = vec![session_with_kind("a", SessionKind::Interactive)];
+        handle_key(&mut app, key(KeyCode::Char('j')));
+
+        assert!(matches!(
+            resolve_attach_or_fork(&app, false),
+            AttachOutcome::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_refuses_fork_for_unknown_kind() {
+        let mut app = App::new();
+        app.sessions = vec![session_with_kind("a", SessionKind::Unknown)];
+        handle_key(&mut app, key(KeyCode::Char('j')));
+
+        assert!(matches!(
+            resolve_attach_or_fork(&app, true),
+            AttachOutcome::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_forks_regardless_of_kind_when_supported() {
+        let mut app = App::new();
+        app.sessions = vec![session_with_kind("a", SessionKind::Background)];
+        handle_key(&mut app, key(KeyCode::Char('j')));
+
+        match resolve_attach_or_fork(&app, true) {
+            AttachOutcome::Ready(command) => {
+                assert_eq!(args_of(&command), ["--resume", "a", "--fork-session"]);
+            }
+            other => panic!("expected Ready, got a different outcome: {other:?}"),
+        }
     }
 }
