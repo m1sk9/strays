@@ -6,33 +6,17 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::App;
-use crate::model::{SessionKind, SessionState, SessionStatus};
+use crate::model::{Session, SessionKind, SessionState, SessionStatus};
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(frame.area());
 
     let rows = app.sessions.iter().map(|session| {
-        let state_cell = match (&session.state, &session.status) {
-            (Some(SessionState::Blocked), _) => {
-                Cell::from("blocked").style(Style::default().fg(Color::Yellow))
-            }
-            (Some(SessionState::Other(other)), _) => Cell::from(other.clone()),
-            (None, Some(SessionStatus::Busy)) => {
-                Cell::from("busy").style(Style::default().fg(Color::Cyan))
-            }
-            (None, Some(SessionStatus::Idle)) => Cell::from("idle"),
-            (None, Some(SessionStatus::Other(other))) => Cell::from(other.clone()),
-            (None, None) => Cell::from("-"),
-        };
-        let kind = match session.kind {
-            SessionKind::Background => "background",
-            SessionKind::Interactive => "interactive",
-            SessionKind::Unknown => "unknown",
-        };
+        let (state_label, state_style) = state_display(session);
 
         Row::new(vec![
-            state_cell,
-            Cell::from(kind),
+            Cell::from(state_label).style(state_style),
+            Cell::from(kind_label(session.kind)),
             Cell::from(format_elapsed(session.started_at)),
             Cell::from(session.cwd.display().to_string()),
             Cell::from(session.name.clone()),
@@ -67,6 +51,29 @@ pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(status), chunks[1]);
 }
 
+/// Interactive sessions carry `status` (busy/idle) instead of `state`, so this
+/// falls back to it rather than showing a bare "-" for every interactive row.
+fn state_display(session: &Session) -> (String, Style) {
+    match (&session.state, &session.status) {
+        (Some(SessionState::Blocked), _) => {
+            ("blocked".to_string(), Style::default().fg(Color::Yellow))
+        }
+        (Some(SessionState::Other(other)), _) => (other.clone(), Style::default()),
+        (None, Some(SessionStatus::Busy)) => ("busy".to_string(), Style::default().fg(Color::Cyan)),
+        (None, Some(SessionStatus::Idle)) => ("idle".to_string(), Style::default()),
+        (None, Some(SessionStatus::Other(other))) => (other.clone(), Style::default()),
+        (None, None) => ("-".to_string(), Style::default()),
+    }
+}
+
+fn kind_label(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Background => "background",
+        SessionKind::Interactive => "interactive",
+        SessionKind::Unknown => "unknown",
+    }
+}
+
 fn format_elapsed(started_at_ms: u64) -> String {
     let started = UNIX_EPOCH + Duration::from_millis(started_at_ms);
     let elapsed = SystemTime::now()
@@ -89,7 +96,54 @@ fn format_elapsed(started_at_ms: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    fn session(state: Option<SessionState>, status: Option<SessionStatus>) -> Session {
+        Session {
+            id: "id".to_string(),
+            session_id: "session-id".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            kind: SessionKind::Background,
+            started_at: 0,
+            name: "name".to_string(),
+            state,
+            pid: None,
+            status,
+        }
+    }
+
+    #[test]
+    fn state_display_prefers_state_over_status() {
+        let (label, _) = state_display(&session(
+            Some(SessionState::Blocked),
+            Some(SessionStatus::Busy),
+        ));
+        assert_eq!(label, "blocked");
+    }
+
+    #[test]
+    fn state_display_falls_back_to_status_when_state_is_absent() {
+        let (label, _) = state_display(&session(None, Some(SessionStatus::Busy)));
+        assert_eq!(label, "busy");
+
+        let (label, _) = state_display(&session(None, Some(SessionStatus::Idle)));
+        assert_eq!(label, "idle");
+    }
+
+    #[test]
+    fn state_display_shows_dash_when_both_are_absent() {
+        let (label, _) = state_display(&session(None, None));
+        assert_eq!(label, "-");
+    }
+
+    #[test]
+    fn kind_label_covers_every_variant() {
+        assert_eq!(kind_label(SessionKind::Background), "background");
+        assert_eq!(kind_label(SessionKind::Interactive), "interactive");
+        assert_eq!(kind_label(SessionKind::Unknown), "unknown");
+    }
 
     #[test]
     fn formats_days_and_hours_for_old_sessions() {
