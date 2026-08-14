@@ -62,7 +62,7 @@ impl App {
         self.provider.attach_command(session)
     }
 
-    pub fn fork_command(&self, session: &Session) -> Command {
+    pub fn fork_command(&self, session: &Session) -> Option<Command> {
         self.provider.fork_command(session)
     }
 
@@ -107,7 +107,10 @@ impl App {
 
         match action::kill(pid) {
             Ok(status) if status.success() => {
-                self.status_message = Some(format!("killed pid {pid}"));
+                // A successful exit only means the signal was delivered, not that
+                // the process has actually exited yet (it may ignore SIGTERM or
+                // take time to clean up), so this can't claim the session is gone.
+                self.status_message = Some(format!("sent SIGTERM to pid {pid}"));
                 self.refresh();
             }
             Ok(status) => {
@@ -147,8 +150,8 @@ mod tests {
             Some(Command::new("true"))
         }
 
-        fn fork_command(&self, _session: &Session) -> Command {
-            Command::new("true")
+        fn fork_command(&self, _session: &Session) -> Option<Command> {
+            Some(Command::new("true"))
         }
     }
 

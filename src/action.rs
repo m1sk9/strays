@@ -9,6 +9,16 @@ pub fn exec_replace(mut command: Command) -> io::Error {
 }
 
 pub fn kill(pid: u32) -> io::Result<ExitStatus> {
+    // `kill -TERM 0` signals the caller's entire process group (including strays
+    // itself), not a single process — refuse it rather than trusting callers to
+    // never pass through a malformed `pid: 0` from `claude agents --json`.
+    if pid == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing to signal pid 0",
+        ));
+    }
+
     Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status()

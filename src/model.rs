@@ -18,8 +18,10 @@ pub struct Session {
 
 /// `id` is absent from `claude agents --json` output when `kind` is `"interactive"`;
 /// derive it from `sessionId`'s first 8 chars instead of leaving `Session::id` optional.
-/// A collision here is only a display ambiguity: `resume_command` always acts on
-/// `session_id`, never on this shortened `id`.
+/// A collision here would route `claude attach <id>` (see `attach_command`) to the
+/// wrong session, but it's the same 8-char truncation Claude Code's own `id` field
+/// already uses for background sessions — matching that scheme is what makes
+/// `attach_command` work at all, not a risk this derivation adds on top of it.
 ///
 /// Kept as a separate struct rather than `id: Option<String>` on `Session` itself,
 /// since serde can't derive one field from another. The exhaustive struct literal in

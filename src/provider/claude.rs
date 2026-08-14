@@ -40,10 +40,20 @@ impl AgentProvider for ClaudeProvider {
         }
     }
 
-    fn fork_command(&self, session: &Session) -> Command {
-        let mut command = Command::new("claude");
-        command.args(["--resume", &session.session_id, "--fork-session"]);
-        command
+    fn fork_command(&self, session: &Session) -> Option<Command> {
+        // Unlike attach, forking a still-running background session is allowed
+        // (per the same error message), and there's no "already open elsewhere"
+        // conflict for `interactive` either — a fork is a brand-new session, not
+        // a takeover. `Unknown` is refused: forking a kind this provider doesn't
+        // recognize at all isn't a call it should make silently.
+        match session.kind {
+            SessionKind::Background | SessionKind::Interactive => {
+                let mut command = Command::new("claude");
+                command.args(["--resume", &session.session_id, "--fork-session"]);
+                Some(command)
+            }
+            SessionKind::Unknown => None,
+        }
     }
 }
 
@@ -233,11 +243,25 @@ mod tests {
     }
 
     #[test]
-    fn fork_command_builds_expected_args() {
+    fn fork_command_builds_expected_args_for_background_and_interactive() {
         let provider = ClaudeProvider;
-        let command = provider.fork_command(&session(SessionKind::Background));
 
-        let args: Vec<&str> = command.get_args().map(|a| a.to_str().unwrap()).collect();
-        assert_eq!(args, ["--resume", "session-id", "--fork-session"]);
+        for kind in [SessionKind::Background, SessionKind::Interactive] {
+            let command = provider
+                .fork_command(&session(kind))
+                .unwrap_or_else(|| panic!("{kind:?} sessions should be forkable"));
+            let args: Vec<&str> = command.get_args().map(|a| a.to_str().unwrap()).collect();
+            assert_eq!(args, ["--resume", "session-id", "--fork-session"]);
+        }
+    }
+
+    #[test]
+    fn fork_command_refuses_unknown_sessions() {
+        let provider = ClaudeProvider;
+        assert!(
+            provider
+                .fork_command(&session(SessionKind::Unknown))
+                .is_none()
+        );
     }
 }

@@ -45,5 +45,7 @@ pub trait AgentProvider {
     /// manager like herdr, not yet supported here).
     fn attach_command(&self, session: &Session) -> Option<Command>;
 
-    fn fork_command(&self, session: &Session) -> Command;
+    /// `None` when this provider doesn't understand the session's kind well
+    /// enough to fork it safely.
+    fn fork_command(&self, session: &Session) -> Option<Command>;
 }

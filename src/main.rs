@@ -47,15 +47,17 @@ fn attach_or_fork(terminal: &mut DefaultTerminal, app: &mut App, fork: bool) -> 
         return Ok(());
     };
     let command = if fork {
-        Some(app.fork_command(session))
+        app.fork_command(session)
     } else {
         app.attach_command(session)
     };
     let Some(command) = command else {
-        app.status_message = Some(
+        app.status_message = Some(if fork {
+            "cannot fork: unrecognized session kind".to_string()
+        } else {
             "cannot attach: session is interactive elsewhere (needs a pane manager like herdr, not yet supported)"
-                .to_string(),
-        );
+                .to_string()
+        });
         return Ok(());
     };
 
