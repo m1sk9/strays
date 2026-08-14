@@ -53,8 +53,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     frame.render_stateful_widget(table, chunks[0], &mut table_state);
 
-    const NEW_SESSION_PREFIX: &str = "open new session in: ";
-
     let status = match app.mode {
         Mode::ConfirmKill => {
             let target = app
@@ -63,15 +61,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 .unwrap_or("session");
             format!("kill \"{target}\"? (y/n)")
         }
-        Mode::NewSession => {
-            let mut status = format!("{NEW_SESSION_PREFIX}{}", app.input);
-            if let Some(message) = &app.status_message {
-                status.push_str("  (");
-                status.push_str(message);
-                status.push(')');
-            }
-            status
-        }
+        Mode::NewSession => new_session_status(&app.input, app.status_message.as_deref()),
         Mode::Normal => app.status_message.clone().unwrap_or_else(|| {
             "q: quit  j/k: move  r: refresh  enter/o: attach  f: fork  x: kill  n: new".to_string()
         }),
@@ -79,13 +69,29 @@ pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(status), chunks[1]);
 
     if app.mode == Mode::NewSession {
-        // Column, not byte/char offset, so wide (CJK/emoji) characters before
-        // the cursor don't leave it misaligned with the actual edit position.
-        let column = chunks[1].x
-            + Span::raw(NEW_SESSION_PREFIX).width() as u16
-            + Span::raw(&app.input[..app.input_cursor]).width() as u16;
+        let column = new_session_cursor_column(chunks[1].x, &app.input, app.input_cursor);
         frame.set_cursor_position((column, chunks[1].y));
     }
+}
+
+const NEW_SESSION_PREFIX: &str = "open new session in: ";
+
+fn new_session_status(input: &str, status_message: Option<&str>) -> String {
+    let mut status = format!("{NEW_SESSION_PREFIX}{input}");
+    if let Some(message) = status_message {
+        status.push_str("  (");
+        status.push_str(message);
+        status.push(')');
+    }
+    status
+}
+
+/// Column, not byte/char offset, so wide (CJK/emoji) characters before the
+/// cursor don't leave it misaligned with the actual edit position.
+fn new_session_cursor_column(base_x: u16, input: &str, cursor: usize) -> u16 {
+    base_x
+        + Span::raw(NEW_SESSION_PREFIX).width() as u16
+        + Span::raw(&input[..cursor]).width() as u16
 }
 
 /// Interactive sessions carry `status` (busy/idle) instead of `state`, so this
@@ -180,6 +186,40 @@ mod tests {
         assert_eq!(kind_label(SessionKind::Background), "background");
         assert_eq!(kind_label(SessionKind::Interactive), "interactive");
         assert_eq!(kind_label(SessionKind::Unknown), "unknown");
+    }
+
+    #[test]
+    fn new_session_status_shows_prefix_and_input() {
+        assert_eq!(
+            new_session_status("/tmp", None),
+            "open new session in: /tmp"
+        );
+    }
+
+    #[test]
+    fn new_session_status_appends_the_error_message() {
+        assert_eq!(
+            new_session_status("/bad", Some("not a directory: /bad")),
+            "open new session in: /bad  (not a directory: /bad)"
+        );
+    }
+
+    #[test]
+    fn new_session_cursor_column_starts_right_after_the_prefix() {
+        let prefix_width = Span::raw(NEW_SESSION_PREFIX).width() as u16;
+        assert_eq!(new_session_cursor_column(0, "abc", 0), prefix_width);
+    }
+
+    #[test]
+    fn new_session_cursor_column_counts_display_width_not_bytes() {
+        let prefix_width = Span::raw(NEW_SESSION_PREFIX).width() as u16;
+        // "日" is a 3-byte, double-width character; the cursor after it should
+        // advance by its display width (2), not its byte length (3).
+        let cursor_after_char = "日".len();
+        assert_eq!(
+            new_session_cursor_column(0, "日", cursor_after_char),
+            prefix_width + 2
+        );
     }
 
     #[test]

@@ -359,4 +359,65 @@ mod tests {
 
         assert_eq!(app.mode, Mode::Normal);
     }
+
+    #[test]
+    fn input_insert_advances_cursor_by_char_len_not_one() {
+        let mut app = App::new();
+        app.input = "ab".to_string();
+        app.input_cursor = 1;
+
+        app.input_insert('日');
+
+        assert_eq!(app.input, "a日b");
+        assert_eq!(app.input_cursor, 1 + '日'.len_utf8());
+    }
+
+    #[test]
+    fn input_backspace_removes_a_whole_multibyte_char() {
+        let mut app = App::new();
+        app.input = "a日".to_string();
+        app.input_cursor = app.input.len();
+
+        app.input_backspace();
+
+        assert_eq!(app.input, "a");
+        assert_eq!(app.input_cursor, 1);
+    }
+
+    #[test]
+    fn input_backspace_at_start_does_nothing() {
+        let mut app = App::new();
+        app.input = "abc".to_string();
+        app.input_cursor = 0;
+
+        app.input_backspace();
+
+        assert_eq!(app.input, "abc");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn input_move_left_and_right_skip_whole_chars() {
+        let mut app = App::new();
+        app.input = "a日b".to_string();
+        app.input_cursor = app.input.len();
+
+        app.input_move_left();
+        assert_eq!(app.input_cursor, 1 + '日'.len_utf8());
+        app.input_move_left();
+        assert_eq!(app.input_cursor, 1);
+        app.input_move_left();
+        assert_eq!(app.input_cursor, 0);
+        app.input_move_left();
+        assert_eq!(app.input_cursor, 0, "already at start");
+
+        app.input_move_right();
+        assert_eq!(app.input_cursor, 1);
+        app.input_move_right();
+        assert_eq!(app.input_cursor, 1 + '日'.len_utf8());
+        app.input_move_right();
+        assert_eq!(app.input_cursor, app.input.len());
+        app.input_move_right();
+        assert_eq!(app.input_cursor, app.input.len(), "already at end");
+    }
 }
