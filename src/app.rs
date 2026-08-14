@@ -1,8 +1,13 @@
+use std::process::Command;
+
+use crate::action;
 use crate::model::Session;
 use crate::provider::{AgentProvider, ClaudeProvider};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
+    ConfirmKill,
 }
 
 pub struct App {
@@ -49,6 +54,18 @@ impl App {
         self.sessions.iter().position(|s| s.session_id == id)
     }
 
+    pub fn selected_session(&self) -> Option<&Session> {
+        self.selected().map(|i| &self.sessions[i])
+    }
+
+    pub fn attach_command(&self, session: &Session) -> Option<Command> {
+        self.provider.attach_command(session)
+    }
+
+    pub fn fork_command(&self, session: &Session) -> Command {
+        self.provider.fork_command(session)
+    }
+
     pub fn select_next(&mut self) {
         if self.sessions.is_empty() {
             return;
@@ -66,6 +83,41 @@ impl App {
             .map_or(0, |i| (i + self.sessions.len() - 1) % self.sessions.len());
         self.selected_session_id = Some(self.sessions[previous].session_id.clone());
     }
+
+    /// Enters the kill confirmation mode, unless the selected session has no
+    /// `pid` (nothing to send a signal to).
+    pub fn request_kill(&mut self) {
+        match self.selected_session().and_then(|s| s.pid) {
+            Some(_) => self.mode = Mode::ConfirmKill,
+            None => {
+                self.status_message = Some("cannot kill: no pid for this session".to_string());
+            }
+        }
+    }
+
+    pub fn cancel_kill(&mut self) {
+        self.mode = Mode::Normal;
+    }
+
+    pub fn confirm_kill(&mut self) {
+        self.mode = Mode::Normal;
+        let Some(pid) = self.selected_session().and_then(|s| s.pid) else {
+            return;
+        };
+
+        match action::kill(pid) {
+            Ok(status) if status.success() => {
+                self.status_message = Some(format!("killed pid {pid}"));
+                self.refresh();
+            }
+            Ok(status) => {
+                self.status_message = Some(format!("kill exited with {status}"));
+            }
+            Err(err) => {
+                self.status_message = Some(format!("failed to kill pid {pid}: {err}"));
+            }
+        }
+    }
 }
 
 impl Default for App {
@@ -77,7 +129,6 @@ impl Default for App {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::process::Command;
 
     use super::*;
     use crate::model::SessionKind;
@@ -92,12 +143,20 @@ mod tests {
             Ok(self.sessions.clone())
         }
 
-        fn resume_command(&self, _session: &Session, _fork: bool) -> Command {
+        fn attach_command(&self, _session: &Session) -> Option<Command> {
+            Some(Command::new("true"))
+        }
+
+        fn fork_command(&self, _session: &Session) -> Command {
             Command::new("true")
         }
     }
 
     fn session(id: &str) -> Session {
+        session_with_pid(id, None)
+    }
+
+    fn session_with_pid(id: &str, pid: Option<u32>) -> Session {
         Session {
             id: id.to_string(),
             session_id: id.to_string(),
@@ -106,7 +165,7 @@ mod tests {
             started_at: 0,
             name: "name".to_string(),
             state: None,
-            pid: None,
+            pid,
             status: None,
         }
     }
@@ -165,5 +224,38 @@ mod tests {
         app.refresh();
 
         assert_eq!(app.selected(), Some(0));
+    }
+
+    #[test]
+    fn request_kill_enters_confirm_mode_when_pid_present() {
+        let mut app = App::new();
+        app.sessions = vec![session_with_pid("a", Some(123))];
+        app.selected_session_id = Some("a".to_string());
+
+        app.request_kill();
+
+        assert_eq!(app.mode, Mode::ConfirmKill);
+    }
+
+    #[test]
+    fn request_kill_is_refused_without_pid() {
+        let mut app = App::new();
+        app.sessions = vec![session("a")];
+        app.selected_session_id = Some("a".to_string());
+
+        app.request_kill();
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.status_message.is_some());
+    }
+
+    #[test]
+    fn cancel_kill_returns_to_normal_mode() {
+        let mut app = App::new();
+        app.mode = Mode::ConfirmKill;
+
+        app.cancel_kill();
+
+        assert_eq!(app.mode, Mode::Normal);
     }
 }

@@ -5,7 +5,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
-use crate::app::App;
+use crate::app::{App, Mode};
 use crate::model::{Session, SessionKind, SessionState, SessionStatus};
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -14,13 +14,21 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let rows = app.sessions.iter().map(|session| {
         let (state_label, state_style) = state_display(session);
 
-        Row::new(vec![
+        let row = Row::new(vec![
             Cell::from(state_label).style(state_style),
             Cell::from(kind_label(session.kind)),
             Cell::from(format_elapsed(session.started_at)),
             Cell::from(session.cwd.display().to_string()),
             Cell::from(session.name.clone()),
-        ])
+        ]);
+
+        // No pid means kill has nothing to signal; dim the row so that's visible
+        // at a glance rather than only surfacing as a message after pressing 'x'.
+        if session.pid.is_none() {
+            row.style(Style::default().add_modifier(Modifier::DIM))
+        } else {
+            row
+        }
     });
 
     let widths = [
@@ -44,10 +52,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     frame.render_stateful_widget(table, chunks[0], &mut table_state);
 
-    let status = app
-        .status_message
-        .clone()
-        .unwrap_or_else(|| "q: quit  j/k: move  r: refresh".to_string());
+    let status = match app.mode {
+        Mode::ConfirmKill => {
+            let target = app
+                .selected_session()
+                .map(|s| s.name.as_str())
+                .unwrap_or("session");
+            format!("kill \"{target}\"? (y/n)")
+        }
+        Mode::Normal => app.status_message.clone().unwrap_or_else(|| {
+            "q: quit  j/k: move  r: refresh  enter/o: attach  f: fork  x: kill".to_string()
+        }),
+    };
     frame.render_widget(Paragraph::new(status), chunks[1]);
 }
 
