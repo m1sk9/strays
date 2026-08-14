@@ -52,19 +52,38 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     frame.render_stateful_widget(table, chunks[0], &mut table_state);
 
-    let status = match app.mode {
+    match app.mode {
         Mode::ConfirmKill => {
             let target = app
                 .selected_session()
                 .map(|s| s.name.as_str())
                 .unwrap_or("session");
-            format!("kill \"{target}\"? (y/n)")
+            let status = format!("kill \"{target}\"? (y/n)");
+            frame.render_widget(Paragraph::new(status), chunks[1]);
         }
-        Mode::Normal => app.status_message.clone().unwrap_or_else(|| {
-            "q: quit  j/k: move  r: refresh  enter/o: attach  f: fork  x: kill".to_string()
-        }),
-    };
-    frame.render_widget(Paragraph::new(status), chunks[1]);
+        Mode::NewSession => {
+            const PREFIX: &str = "open new session in: ";
+            let mut status = format!("{PREFIX}{}", app.input);
+            if let Some(message) = &app.status_message {
+                status.push_str("  (");
+                status.push_str(message);
+                status.push(')');
+            }
+            frame.render_widget(Paragraph::new(status), chunks[1]);
+
+            let column = chunks[1].x
+                + PREFIX.chars().count() as u16
+                + app.input[..app.input_cursor].chars().count() as u16;
+            frame.set_cursor_position((column, chunks[1].y));
+        }
+        Mode::Normal => {
+            let status = app.status_message.clone().unwrap_or_else(|| {
+                "q: quit  j/k: move  r: refresh  enter/o: attach  f: fork  x: kill  n: new"
+                    .to_string()
+            });
+            frame.render_widget(Paragraph::new(status), chunks[1]);
+        }
+    }
 }
 
 /// Interactive sessions carry `status` (busy/idle) instead of `state`, so this

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 
 use crate::action;
@@ -8,6 +9,7 @@ use crate::provider::{AgentProvider, ClaudeProvider};
 pub enum Mode {
     Normal,
     ConfirmKill,
+    NewSession,
 }
 
 pub struct App {
@@ -15,6 +17,10 @@ pub struct App {
     pub mode: Mode,
     pub status_message: Option<String>,
     pub should_quit: bool,
+    /// Path being typed in `Mode::NewSession`; byte offset into it, always kept
+    /// on a UTF-8 char boundary.
+    pub input: String,
+    pub input_cursor: usize,
     selected_session_id: Option<String>,
     provider: Box<dyn AgentProvider>,
 }
@@ -26,6 +32,8 @@ impl App {
             mode: Mode::Normal,
             status_message: None,
             should_quit: false,
+            input: String::new(),
+            input_cursor: 0,
             selected_session_id: None,
             provider: Box::new(ClaudeProvider),
         }
@@ -120,6 +128,82 @@ impl App {
                 self.status_message = Some(format!("failed to kill pid {pid}: {err}"));
             }
         }
+    }
+
+    /// Enters the new-session input mode, prefilled with the selected row's
+    /// `cwd` so opening another session in the same project is one keystroke
+    /// away rather than retyping the whole path.
+    pub fn start_new_session_input(&mut self) {
+        self.mode = Mode::NewSession;
+        self.status_message = None;
+        self.input = self
+            .selected_session()
+            .map(|s| s.cwd.display().to_string())
+            .unwrap_or_default();
+        self.input_cursor = self.input.len();
+    }
+
+    pub fn cancel_new_session_input(&mut self) {
+        self.mode = Mode::Normal;
+        self.input.clear();
+        self.input_cursor = 0;
+    }
+
+    pub fn input_insert(&mut self, c: char) {
+        self.input.insert(self.input_cursor, c);
+        self.input_cursor += c.len_utf8();
+    }
+
+    pub fn input_backspace(&mut self) {
+        let Some(previous) = self.prev_char_boundary() else {
+            return;
+        };
+        self.input.drain(previous..self.input_cursor);
+        self.input_cursor = previous;
+    }
+
+    pub fn input_move_left(&mut self) {
+        if let Some(previous) = self.prev_char_boundary() {
+            self.input_cursor = previous;
+        }
+    }
+
+    pub fn input_move_right(&mut self) {
+        if let Some(next) = self.next_char_boundary() {
+            self.input_cursor = next;
+        }
+    }
+
+    fn prev_char_boundary(&self) -> Option<usize> {
+        self.input[..self.input_cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+    }
+
+    fn next_char_boundary(&self) -> Option<usize> {
+        self.input[self.input_cursor..]
+            .char_indices()
+            .nth(1)
+            .map(|(i, _)| self.input_cursor + i)
+            .or_else(|| (self.input_cursor < self.input.len()).then_some(self.input.len()))
+    }
+
+    /// Validates the typed path and returns to normal mode on success. Leaves
+    /// `Mode::NewSession` (and the typed input) untouched on failure so the
+    /// user can fix a typo instead of retyping the whole path.
+    pub fn confirm_new_session_input(&mut self) -> Option<PathBuf> {
+        let path = PathBuf::from(self.input.trim());
+        if !path.is_dir() {
+            self.status_message = Some(format!("not a directory: {}", path.display()));
+            return None;
+        }
+
+        self.mode = Mode::Normal;
+        self.status_message = None;
+        self.input.clear();
+        self.input_cursor = 0;
+        Some(path)
     }
 }
 
