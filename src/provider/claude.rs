@@ -14,10 +14,11 @@ impl AgentProvider for ClaudeProvider {
             .map_err(ProviderError::Spawn)?;
 
         if !output.status.success() {
-            return Err(ProviderError::NonZeroExit(output.status));
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            return Err(ProviderError::NonZeroExit(output.status, stderr));
         }
 
-        serde_json::from_slice(&output.stdout).map_err(ProviderError::Parse)
+        parse_sessions(&output.stdout)
     }
 
     fn resume_command(&self, session: &Session, fork: bool) -> Command {
@@ -30,10 +31,19 @@ impl AgentProvider for ClaudeProvider {
     }
 }
 
+fn parse_sessions(stdout: &[u8]) -> Result<Vec<Session>, ProviderError> {
+    // `claude agents --json` is only documented to print `[]` for zero sessions, but
+    // treat blank stdout the same way rather than surfacing it as a parse error.
+    if stdout.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Vec::new());
+    }
+    serde_json::from_slice(stdout).map_err(ProviderError::Parse)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{SessionKind, SessionState};
+    use crate::model::{SessionKind, SessionState, SessionStatus};
 
     const BRIEF_SAMPLE: &str = r#"[
       {
@@ -70,6 +80,29 @@ mod tests {
       }
     ]"#;
 
+    const UNKNOWN_STATUS_SAMPLE: &str = r#"[
+      {
+        "pid": 1,
+        "cwd": "/tmp/example",
+        "kind": "interactive",
+        "startedAt": 1,
+        "sessionId": "aaaaaaaa-0000-0000-0000-000000000000",
+        "name": "example",
+        "status": "thinking"
+      }
+    ]"#;
+
+    const UNKNOWN_KIND_SAMPLE: &str = r#"[
+      {
+        "id": "aaaaaaaa",
+        "cwd": "/tmp/example",
+        "kind": "remote",
+        "startedAt": 1,
+        "sessionId": "aaaaaaaa-0000-0000-0000-000000000000",
+        "name": "example"
+      }
+    ]"#;
+
     // Real `claude agents --json` output for an interactive session: no `id`, has `pid`/`status`.
     const INTERACTIVE_MISSING_ID_SAMPLE: &str = r#"[
       {
@@ -91,6 +124,7 @@ mod tests {
         assert_eq!(session.kind, SessionKind::Interactive);
         assert_eq!(session.pid, Some(82425));
         assert_eq!(session.state, None);
+        assert_eq!(session.status, Some(SessionStatus::Busy));
     }
 
     #[test]
@@ -119,6 +153,27 @@ mod tests {
             sessions[0].state,
             Some(SessionState::Other("working".to_string()))
         );
+    }
+
+    #[test]
+    fn unknown_kind_falls_back_to_other() {
+        let sessions: Vec<Session> = serde_json::from_str(UNKNOWN_KIND_SAMPLE).unwrap();
+        assert_eq!(sessions[0].kind, SessionKind::Unknown);
+    }
+
+    #[test]
+    fn unknown_status_falls_back_to_other() {
+        let sessions: Vec<Session> = serde_json::from_str(UNKNOWN_STATUS_SAMPLE).unwrap();
+        assert_eq!(
+            sessions[0].status,
+            Some(SessionStatus::Other("thinking".to_string()))
+        );
+    }
+
+    #[test]
+    fn blank_stdout_is_treated_as_no_sessions() {
+        assert!(parse_sessions(b"").unwrap().is_empty());
+        assert!(parse_sessions(b"   \n").unwrap().is_empty());
     }
 
     #[test]

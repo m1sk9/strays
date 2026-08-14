@@ -13,11 +13,18 @@ pub struct Session {
     pub name: String,
     pub state: Option<SessionState>,
     pub pid: Option<u32>,
-    pub status: Option<serde_json::Value>,
+    pub status: Option<SessionStatus>,
 }
 
 /// `id` is absent from `claude agents --json` output when `kind` is `"interactive"`;
 /// derive it from `sessionId`'s first 8 chars instead of leaving `Session::id` optional.
+/// A collision here is only a display ambiguity: `resume_command` always acts on
+/// `session_id`, never on this shortened `id`.
+///
+/// Kept as a separate struct rather than `id: Option<String>` on `Session` itself,
+/// since serde can't derive one field from another. The exhaustive struct literal in
+/// `From` below means a field added to `Session` and forgotten here fails to compile
+/// instead of silently dropping data.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawSession {
@@ -29,7 +36,7 @@ struct RawSession {
     name: String,
     state: Option<SessionState>,
     pid: Option<u32>,
-    status: Option<serde_json::Value>,
+    status: Option<SessionStatus>,
 }
 
 impl From<RawSession> for Session {
@@ -56,6 +63,10 @@ impl From<RawSession> for Session {
 pub enum SessionKind {
     Background,
     Interactive,
+    /// No other kind has been observed; keep unknown values instead of
+    /// failing the whole `Vec<Session>` parse over one unrecognized session.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +85,28 @@ impl<'de> Deserialize<'de> for SessionState {
         Ok(match raw.as_str() {
             "blocked" => SessionState::Blocked,
             _ => SessionState::Other(raw),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionStatus {
+    Busy,
+    Idle,
+    /// Only `"busy"`/`"idle"` have been observed; keep unknown values instead of failing.
+    Other(String),
+}
+
+impl<'de> Deserialize<'de> for SessionStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Ok(match raw.as_str() {
+            "busy" => SessionStatus::Busy,
+            "idle" => SessionStatus::Idle,
+            _ => SessionStatus::Other(raw),
         })
     }
 }
