@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -47,3 +48,30 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish
+
+  homebrew:
+    needs: release-please
+    if: needs.release-please.outputs.release_created
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Get token
+        id: tap-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: m1sk9
+          repositories: homebrew-tap
+          # Skip token revocation because expired tokens are automatically
+          # invalidated by GitHub anyway.
+          skip-token-revoke: true
+
+      - name: Dispatch publish event to m1sk9/homebrew-tap
+        env:
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          gh api repos/m1sk9/homebrew-tap/dispatches \
+            -f event_type=publish \
+            -f "client_payload[formula]=strays" \
+            -f "client_payload[tag]=$TAG_NAME"

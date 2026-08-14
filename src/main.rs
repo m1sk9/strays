@@ -14,7 +14,62 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 
 use app::{App, Mode};
 
+const HELP: &str = "\
+strays - a TUI for centralized management of LLM agents running on machines.
+
+Usage:
+  strays              Launch the TUI
+  strays --version    Print the version and exit
+  strays --help       Print this help and exit
+
+Keybindings:
+  j, Down             Move selection down
+  k, Up               Move selection up
+  r                   Refresh the session list
+  Enter, o            Attach to the selected session
+  f                   Fork the selected session
+  x                   Request to kill the selected session (y confirms)
+  n                   Open a new session in a directory
+  q, Esc, Ctrl-C      Quit";
+
+#[derive(Debug, PartialEq)]
+enum CliAction {
+    Run,
+    Version,
+    Help,
+}
+
+/// Reads the flags a non-interactive caller (a Homebrew formula's `test` block,
+/// a smoke check in CI) can rely on. Unknown arguments fall through to the TUI
+/// rather than erroring, since strays takes no positional arguments of its own.
+fn parse_args<I: IntoIterator<Item = String>>(args: I) -> CliAction {
+    for arg in args {
+        match arg.as_str() {
+            "--version" | "-V" => return CliAction::Version,
+            "--help" | "-h" => return CliAction::Help,
+            _ => {}
+        }
+    }
+    CliAction::Run
+}
+
+fn version_text() -> String {
+    format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+}
+
 fn main() -> io::Result<()> {
+    match parse_args(std::env::args().skip(1)) {
+        CliAction::Version => {
+            println!("{}", version_text());
+            return Ok(());
+        }
+        CliAction::Help => {
+            println!("{HELP}");
+            return Ok(());
+        }
+        CliAction::Run => {}
+    }
+
     let mut terminal = ratatui::try_init()?;
     let mut app = App::new();
     app.refresh();
@@ -211,6 +266,49 @@ mod tests {
             state: None,
             pid,
             status: None,
+        }
+    }
+
+    fn args(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| a.to_string()).collect()
+    }
+
+    #[test]
+    fn version_flags_request_the_version() {
+        assert_eq!(parse_args(args(&["--version"])), CliAction::Version);
+        assert_eq!(parse_args(args(&["-V"])), CliAction::Version);
+    }
+
+    #[test]
+    fn help_flags_request_the_help() {
+        assert_eq!(parse_args(args(&["--help"])), CliAction::Help);
+        assert_eq!(parse_args(args(&["-h"])), CliAction::Help);
+    }
+
+    #[test]
+    fn no_arguments_launch_the_tui() {
+        assert_eq!(parse_args(args(&[])), CliAction::Run);
+    }
+
+    #[test]
+    fn unknown_arguments_launch_the_tui() {
+        assert_eq!(parse_args(args(&["--nope"])), CliAction::Run);
+    }
+
+    #[test]
+    fn version_text_names_the_binary_and_its_version() {
+        assert_eq!(
+            version_text(),
+            format!("strays {}", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn help_lists_usage_and_every_keybinding() {
+        assert!(HELP.contains("Usage:"));
+        assert!(HELP.contains("--version"));
+        for key in ["j, Down", "k, Up", "r", "Enter, o", "f", "x", "n", "q, Esc"] {
+            assert!(HELP.contains(key), "help is missing the {key} keybinding");
         }
     }
 
