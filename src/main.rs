@@ -5,6 +5,8 @@ mod provider;
 mod ui;
 
 use std::io;
+use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 
 use ratatui::DefaultTerminal;
@@ -30,11 +32,30 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         if event::poll(Duration::from_millis(250))?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
-            && let Some(fork) = handle_key(app, key)
         {
-            attach_or_fork(terminal, app, fork)?;
+            match handle_key(app, key) {
+                KeyOutcome::None => {}
+                KeyOutcome::Attach => attach_or_fork(terminal, app, false)?,
+                KeyOutcome::Fork => attach_or_fork(terminal, app, true)?,
+                KeyOutcome::OpenDirectory(path) => open_new_session(terminal, app, path)?,
+            }
         }
     }
+    Ok(())
+}
+
+/// Hands the terminal to `command` via exec, restoring the TUI only if exec
+/// itself failed to start `claude` at all.
+fn exec_and_recover(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    command: Command,
+) -> io::Result<()> {
+    ratatui::restore();
+    let err = action::exec_replace(command);
+
+    *terminal = ratatui::try_init()?;
+    app.status_message = Some(format!("failed to start claude: {err}"));
     Ok(())
 }
 
@@ -84,21 +105,35 @@ fn attach_or_fork(terminal: &mut DefaultTerminal, app: &mut App, fork: bool) -> 
         AttachOutcome::Ready(command) => command,
     };
 
-    ratatui::restore();
-    let err = action::exec_replace(command);
-
-    *terminal = ratatui::try_init()?;
-    app.status_message = Some(format!("failed to start claude: {err}"));
-    Ok(())
+    exec_and_recover(terminal, app, command)
 }
 
-/// Returns `Some(fork)` when the key requests attaching to (or forking) the
-/// selected session; the caller then owns the terminal handoff since exec
-/// needs it restored first.
-fn handle_key(app: &mut App, key: KeyEvent) -> Option<bool> {
+/// Starts a brand-new session in `path` via the active provider, so this
+/// stays in sync with whichever agent `attach`/`fork` are using instead of
+/// hardcoding a binary name of its own.
+fn open_new_session(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    path: PathBuf,
+) -> io::Result<()> {
+    let command = app.new_session_command(&path);
+    exec_and_recover(terminal, app, command)
+}
+
+#[derive(Debug, PartialEq)]
+enum KeyOutcome {
+    None,
+    Attach,
+    Fork,
+    OpenDirectory(PathBuf),
+}
+
+/// Decides what a key press should do; the caller owns any terminal handoff
+/// (attach/fork/open all need it restored before exec).
+fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.should_quit = true;
-        return None;
+        return KeyOutcome::None;
     }
 
     match app.mode {
@@ -110,22 +145,44 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Option<bool> {
                 app.cancel_kill();
             }
         }
+        Mode::NewSession => return handle_new_session_key(app, key),
     }
-    None
+    KeyOutcome::None
 }
 
-fn handle_normal_key(app: &mut App, key: KeyEvent) -> Option<bool> {
+fn handle_normal_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
         KeyCode::Down | KeyCode::Char('j') => app.select_next(),
         KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
         KeyCode::Char('r') => app.refresh(),
-        KeyCode::Enter | KeyCode::Char('o') => return Some(false),
-        KeyCode::Char('f') => return Some(true),
+        KeyCode::Enter | KeyCode::Char('o') => return KeyOutcome::Attach,
+        KeyCode::Char('f') => return KeyOutcome::Fork,
         KeyCode::Char('x') => app.request_kill(),
+        KeyCode::Char('n') => app.start_new_session_input(),
         _ => {}
     }
-    None
+    KeyOutcome::None
+}
+
+fn handle_new_session_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    match key.code {
+        KeyCode::Esc => app.cancel_new_session_input(),
+        KeyCode::Enter => {
+            if let Some(path) = app.confirm_new_session_input() {
+                return KeyOutcome::OpenDirectory(path);
+            }
+        }
+        KeyCode::Backspace => app.input_backspace(),
+        KeyCode::Left => app.input_move_left(),
+        KeyCode::Right => app.input_move_right(),
+        // Excludes CONTROL so readline-style chords (Ctrl+U, Ctrl+A, ...) don't
+        // insert their letter literally; none of them are bound to an edit
+        // action here, so the only safe behavior is to ignore them.
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => app.input_insert(c),
+        _ => {}
+    }
+    KeyOutcome::None
 }
 
 #[cfg(test)]
@@ -213,20 +270,32 @@ mod tests {
     #[test]
     fn enter_and_o_request_attach() {
         let mut app = App::new();
-        assert_eq!(handle_key(&mut app, key(KeyCode::Enter)), Some(false));
-        assert_eq!(handle_key(&mut app, key(KeyCode::Char('o'))), Some(false));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Enter)),
+            KeyOutcome::Attach
+        );
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('o'))),
+            KeyOutcome::Attach
+        );
     }
 
     #[test]
     fn f_requests_fork() {
         let mut app = App::new();
-        assert_eq!(handle_key(&mut app, key(KeyCode::Char('f'))), Some(true));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('f'))),
+            KeyOutcome::Fork
+        );
     }
 
     #[test]
     fn navigation_keys_do_not_request_attach() {
         let mut app = App::new();
-        assert_eq!(handle_key(&mut app, key(KeyCode::Char('j'))), None);
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('j'))),
+            KeyOutcome::None
+        );
     }
 
     #[test]
@@ -336,5 +405,86 @@ mod tests {
             }
             other => panic!("expected Ready, got a different outcome: {other:?}"),
         }
+    }
+
+    #[test]
+    fn n_enters_new_session_input_mode_prefilled_with_selected_cwd() {
+        let mut app = App::new();
+        app.sessions = vec![session_with_kind("a", SessionKind::Background)];
+        handle_key(&mut app, key(KeyCode::Char('j')));
+
+        handle_key(&mut app, key(KeyCode::Char('n')));
+
+        assert_eq!(app.mode, Mode::NewSession);
+        assert_eq!(app.input, "/tmp");
+    }
+
+    #[test]
+    fn typing_and_backspace_edit_the_input() {
+        let mut app = App::new();
+        app.mode = Mode::NewSession;
+
+        handle_key(&mut app, key(KeyCode::Char('/')));
+        handle_key(&mut app, key(KeyCode::Char('x')));
+        assert_eq!(app.input, "/x");
+
+        handle_key(&mut app, key(KeyCode::Backspace));
+        assert_eq!(app.input, "/");
+    }
+
+    #[test]
+    fn ctrl_held_letters_are_not_inserted_into_the_input() {
+        let mut app = App::new();
+        app.mode = Mode::NewSession;
+        app.input = "/tmp".to_string();
+        app.input_cursor = app.input.len();
+
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(app.input, "/tmp");
+    }
+
+    #[test]
+    fn enter_opens_a_valid_directory_and_returns_to_normal_mode() {
+        let mut app = App::new();
+        app.mode = Mode::NewSession;
+        app.input = "/tmp".to_string();
+        app.input_cursor = app.input.len();
+
+        let outcome = handle_key(&mut app, key(KeyCode::Enter));
+
+        assert_eq!(outcome, KeyOutcome::OpenDirectory(PathBuf::from("/tmp")));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn enter_on_a_missing_directory_stays_in_input_mode() {
+        let mut app = App::new();
+        app.mode = Mode::NewSession;
+        app.input = "/definitely/not/a/real/path".to_string();
+        app.input_cursor = app.input.len();
+
+        let outcome = handle_key(&mut app, key(KeyCode::Enter));
+
+        assert_eq!(outcome, KeyOutcome::None);
+        assert_eq!(app.mode, Mode::NewSession);
+        assert!(app.status_message.is_some());
+    }
+
+    #[test]
+    fn esc_cancels_new_session_input() {
+        let mut app = App::new();
+        app.mode = Mode::NewSession;
+        app.input = "/tmp".to_string();
+        app.status_message = Some("not a directory: /bad/path".to_string());
+
+        handle_key(&mut app, key(KeyCode::Esc));
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.input.is_empty());
+        assert!(app.status_message.is_none());
     }
 }

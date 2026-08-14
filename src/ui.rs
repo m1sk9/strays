@@ -1,8 +1,9 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::{App, Mode};
@@ -60,11 +61,40 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 .unwrap_or("session");
             format!("kill \"{target}\"? (y/n)")
         }
+        Mode::NewSession => new_session_status(&app.input, app.status_message.as_deref()),
         Mode::Normal => app.status_message.clone().unwrap_or_else(|| {
-            "q: quit  j/k: move  r: refresh  enter/o: attach  f: fork  x: kill".to_string()
+            "q: quit  j/k: move  r: refresh  enter/o: attach  f: fork  x: kill  n: new".to_string()
         }),
     };
     frame.render_widget(Paragraph::new(status), chunks[1]);
+
+    if app.mode == Mode::NewSession {
+        let column = new_session_cursor_column(chunks[1], &app.input, app.input_cursor);
+        frame.set_cursor_position((column, chunks[1].y));
+    }
+}
+
+const NEW_SESSION_PREFIX: &str = "open new session in: ";
+
+fn new_session_status(input: &str, status_message: Option<&str>) -> String {
+    let mut status = format!("{NEW_SESSION_PREFIX}{input}");
+    if let Some(message) = status_message {
+        status.push_str("  (");
+        status.push_str(message);
+        status.push(')');
+    }
+    status
+}
+
+/// Column, not byte/char offset, so wide (CJK/emoji) characters before the
+/// cursor don't leave it misaligned with the actual edit position. Clamped to
+/// the status row's last column so a path longer than the terminal is wide
+/// doesn't push the real cursor off the area `Paragraph` actually draws into.
+fn new_session_cursor_column(area: Rect, input: &str, cursor: usize) -> u16 {
+    let column = area.x
+        + Span::raw(NEW_SESSION_PREFIX).width() as u16
+        + Span::raw(&input[..cursor]).width() as u16;
+    column.min(area.x + area.width.saturating_sub(1))
 }
 
 /// Interactive sessions carry `status` (busy/idle) instead of `state`, so this
@@ -159,6 +189,56 @@ mod tests {
         assert_eq!(kind_label(SessionKind::Background), "background");
         assert_eq!(kind_label(SessionKind::Interactive), "interactive");
         assert_eq!(kind_label(SessionKind::Unknown), "unknown");
+    }
+
+    #[test]
+    fn new_session_status_shows_prefix_and_input() {
+        assert_eq!(
+            new_session_status("/tmp", None),
+            "open new session in: /tmp"
+        );
+    }
+
+    #[test]
+    fn new_session_status_appends_the_error_message() {
+        assert_eq!(
+            new_session_status("/bad", Some("not a directory: /bad")),
+            "open new session in: /bad  (not a directory: /bad)"
+        );
+    }
+
+    fn status_row(width: u16) -> Rect {
+        Rect::new(0, 0, width, 1)
+    }
+
+    #[test]
+    fn new_session_cursor_column_starts_right_after_the_prefix() {
+        let prefix_width = Span::raw(NEW_SESSION_PREFIX).width() as u16;
+        assert_eq!(
+            new_session_cursor_column(status_row(80), "abc", 0),
+            prefix_width
+        );
+    }
+
+    #[test]
+    fn new_session_cursor_column_counts_display_width_not_bytes() {
+        let prefix_width = Span::raw(NEW_SESSION_PREFIX).width() as u16;
+        let cursor_after_char = "日".len();
+        assert_eq!(
+            new_session_cursor_column(status_row(80), "日", cursor_after_char),
+            prefix_width + 2
+        );
+    }
+
+    #[test]
+    fn new_session_cursor_column_clamps_to_the_row_width() {
+        let long_input = "a".repeat(100);
+        let cursor = long_input.len();
+
+        assert_eq!(
+            new_session_cursor_column(status_row(40), &long_input, cursor),
+            39
+        );
     }
 
     #[test]

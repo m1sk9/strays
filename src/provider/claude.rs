@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 
 use crate::model::{Session, SessionKind};
@@ -54,6 +55,13 @@ impl AgentProvider for ClaudeProvider {
             }
             SessionKind::Unknown => None,
         }
+    }
+
+    fn new_session_command(&self, path: &Path) -> Command {
+        // No `--resume`: this isn't tied to any existing session.
+        let mut command = Command::new("claude");
+        command.current_dir(path);
+        command
     }
 }
 
@@ -263,5 +271,14 @@ mod tests {
                 .fork_command(&session(SessionKind::Unknown))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn new_session_command_has_no_resume_flag_and_sets_the_working_directory() {
+        let provider = ClaudeProvider;
+        let command = provider.new_session_command(Path::new("/tmp"));
+
+        assert!(command.get_args().next().is_none());
+        assert_eq!(command.get_current_dir(), Some(Path::new("/tmp")));
     }
 }
