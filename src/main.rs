@@ -108,16 +108,15 @@ fn attach_or_fork(terminal: &mut DefaultTerminal, app: &mut App, fork: bool) -> 
     exec_and_recover(terminal, app, command)
 }
 
-/// Starts a brand-new `claude` session in `path` — no `--resume`, since this
-/// isn't tied to any existing session.
+/// Starts a brand-new session in `path` via the active provider, so this
+/// stays in sync with whichever agent `attach`/`fork` are using instead of
+/// hardcoding a binary name of its own.
 fn open_new_session(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     path: PathBuf,
 ) -> io::Result<()> {
-    let mut command = Command::new("claude");
-    command.current_dir(path);
-
+    let command = app.new_session_command(&path);
     exec_and_recover(terminal, app, command)
 }
 
@@ -177,7 +176,10 @@ fn handle_new_session_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         KeyCode::Backspace => app.input_backspace(),
         KeyCode::Left => app.input_move_left(),
         KeyCode::Right => app.input_move_right(),
-        KeyCode::Char(c) => app.input_insert(c),
+        // Excludes CONTROL so readline-style chords (Ctrl+U, Ctrl+A, ...) don't
+        // insert their letter literally; none of them are bound to an edit
+        // action here, so the only safe behavior is to ignore them.
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => app.input_insert(c),
         _ => {}
     }
     KeyOutcome::None
@@ -428,6 +430,21 @@ mod tests {
 
         handle_key(&mut app, key(KeyCode::Backspace));
         assert_eq!(app.input, "/");
+    }
+
+    #[test]
+    fn ctrl_held_letters_are_not_inserted_into_the_input() {
+        let mut app = App::new();
+        app.mode = Mode::NewSession;
+        app.input = "/tmp".to_string();
+        app.input_cursor = app.input.len();
+
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(app.input, "/tmp");
     }
 
     #[test]

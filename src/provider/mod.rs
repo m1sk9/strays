@@ -2,6 +2,7 @@ mod claude;
 
 pub use claude::ClaudeProvider;
 
+use std::path::Path;
 use std::process::Command;
 
 use crate::model::Session;
@@ -48,4 +49,7 @@ pub trait AgentProvider {
     /// `None` when this provider doesn't understand the session's kind well
     /// enough to fork it safely.
     fn fork_command(&self, session: &Session) -> Option<Command>;
+
+    /// Starts a brand-new session in `path`, unrelated to any existing one.
+    fn new_session_command(&self, path: &Path) -> Command;
 }

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::action;
@@ -72,6 +72,10 @@ impl App {
 
     pub fn fork_command(&self, session: &Session) -> Option<Command> {
         self.provider.fork_command(session)
+    }
+
+    pub fn new_session_command(&self, path: &Path) -> Command {
+        self.provider.new_session_command(path)
     }
 
     pub fn select_next(&mut self) {
@@ -184,17 +188,16 @@ impl App {
 
     fn next_char_boundary(&self) -> Option<usize> {
         self.input[self.input_cursor..]
-            .char_indices()
-            .nth(1)
-            .map(|(i, _)| self.input_cursor + i)
-            .or_else(|| (self.input_cursor < self.input.len()).then_some(self.input.len()))
+            .chars()
+            .next()
+            .map(|c| self.input_cursor + c.len_utf8())
     }
 
     /// Validates the typed path and returns to normal mode on success. Leaves
     /// `Mode::NewSession` (and the typed input) untouched on failure so the
     /// user can fix a typo instead of retyping the whole path.
     pub fn confirm_new_session_input(&mut self) -> Option<PathBuf> {
-        let path = PathBuf::from(self.input.trim());
+        let path = expand_tilde(self.input.trim());
         if !path.is_dir() {
             self.status_message = Some(format!("not a directory: {}", path.display()));
             return None;
@@ -205,6 +208,24 @@ impl App {
         self.input.clear();
         self.input_cursor = 0;
         Some(path)
+    }
+}
+
+/// Expands a leading `~` or `~/...` to `$HOME`, since `Path::is_dir` never does
+/// shell-style expansion and this is the input's only route to the filesystem.
+fn expand_tilde(input: &str) -> PathBuf {
+    let Some(rest) = input.strip_prefix('~') else {
+        return PathBuf::from(input);
+    };
+    let Some(home) = std::env::var_os("HOME") else {
+        return PathBuf::from(input);
+    };
+
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    if rest.is_empty() {
+        PathBuf::from(home)
+    } else {
+        PathBuf::from(home).join(rest)
     }
 }
 
@@ -237,6 +258,10 @@ mod tests {
 
         fn fork_command(&self, _session: &Session) -> Option<Command> {
             Some(Command::new("true"))
+        }
+
+        fn new_session_command(&self, _path: &Path) -> Command {
+            Command::new("true")
         }
     }
 
@@ -419,5 +444,39 @@ mod tests {
         assert_eq!(app.input_cursor, app.input.len());
         app.input_move_right();
         assert_eq!(app.input_cursor, app.input.len(), "already at end");
+    }
+
+    #[test]
+    fn expand_tilde_resolves_to_home_directory() {
+        let home = std::env::var("HOME").expect("HOME must be set to run this test");
+
+        assert_eq!(expand_tilde("~"), PathBuf::from(&home));
+        assert_eq!(
+            expand_tilde("~/projects/foo"),
+            PathBuf::from(&home).join("projects/foo")
+        );
+    }
+
+    #[test]
+    fn expand_tilde_leaves_other_paths_untouched() {
+        assert_eq!(expand_tilde("/tmp"), PathBuf::from("/tmp"));
+        assert_eq!(
+            expand_tilde("relative/path"),
+            PathBuf::from("relative/path")
+        );
+    }
+
+    #[test]
+    fn confirm_new_session_input_expands_tilde_before_validating() {
+        let home = std::env::var("HOME").expect("HOME must be set to run this test");
+        let mut app = App::new();
+        app.mode = Mode::NewSession;
+        app.input = "~".to_string();
+        app.input_cursor = app.input.len();
+
+        let path = app.confirm_new_session_input();
+
+        assert_eq!(path, Some(PathBuf::from(home)));
+        assert_eq!(app.mode, Mode::Normal);
     }
 }

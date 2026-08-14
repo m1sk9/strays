@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
@@ -69,7 +69,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(status), chunks[1]);
 
     if app.mode == Mode::NewSession {
-        let column = new_session_cursor_column(chunks[1].x, &app.input, app.input_cursor);
+        let column = new_session_cursor_column(chunks[1], &app.input, app.input_cursor);
         frame.set_cursor_position((column, chunks[1].y));
     }
 }
@@ -87,11 +87,14 @@ fn new_session_status(input: &str, status_message: Option<&str>) -> String {
 }
 
 /// Column, not byte/char offset, so wide (CJK/emoji) characters before the
-/// cursor don't leave it misaligned with the actual edit position.
-fn new_session_cursor_column(base_x: u16, input: &str, cursor: usize) -> u16 {
-    base_x
+/// cursor don't leave it misaligned with the actual edit position. Clamped to
+/// the status row's last column so a path longer than the terminal is wide
+/// doesn't push the real cursor off the area `Paragraph` actually draws into.
+fn new_session_cursor_column(area: Rect, input: &str, cursor: usize) -> u16 {
+    let column = area.x
         + Span::raw(NEW_SESSION_PREFIX).width() as u16
-        + Span::raw(&input[..cursor]).width() as u16
+        + Span::raw(&input[..cursor]).width() as u16;
+    column.min(area.x + area.width.saturating_sub(1))
 }
 
 /// Interactive sessions carry `status` (busy/idle) instead of `state`, so this
@@ -204,21 +207,37 @@ mod tests {
         );
     }
 
+    fn status_row(width: u16) -> Rect {
+        Rect::new(0, 0, width, 1)
+    }
+
     #[test]
     fn new_session_cursor_column_starts_right_after_the_prefix() {
         let prefix_width = Span::raw(NEW_SESSION_PREFIX).width() as u16;
-        assert_eq!(new_session_cursor_column(0, "abc", 0), prefix_width);
+        assert_eq!(
+            new_session_cursor_column(status_row(80), "abc", 0),
+            prefix_width
+        );
     }
 
     #[test]
     fn new_session_cursor_column_counts_display_width_not_bytes() {
         let prefix_width = Span::raw(NEW_SESSION_PREFIX).width() as u16;
-        // "日" is a 3-byte, double-width character; the cursor after it should
-        // advance by its display width (2), not its byte length (3).
         let cursor_after_char = "日".len();
         assert_eq!(
-            new_session_cursor_column(0, "日", cursor_after_char),
+            new_session_cursor_column(status_row(80), "日", cursor_after_char),
             prefix_width + 2
+        );
+    }
+
+    #[test]
+    fn new_session_cursor_column_clamps_to_the_row_width() {
+        let long_input = "a".repeat(100);
+        let cursor = long_input.len();
+
+        assert_eq!(
+            new_session_cursor_column(status_row(40), &long_input, cursor),
+            39
         );
     }
 
