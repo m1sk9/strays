@@ -42,7 +42,7 @@ mod tests {
         "kind": "background",
         "startedAt": 1784482154257,
         "sessionId": "c0a63a21-9725-42da-bc35-b940c8d8c342",
-        "name": "tailscale-acl-gitops-infra ⑂ 手順書を作成して",
+        "name": "tailscale-acl-gitops-infra ⑂ Please create document",
         "state": "blocked"
       }
     ]"#;
