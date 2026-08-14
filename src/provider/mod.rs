@@ -39,5 +39,13 @@ impl std::error::Error for ProviderError {
 
 pub trait AgentProvider {
     fn list_sessions(&self) -> Result<Vec<Session>, ProviderError>;
-    fn resume_command(&self, session: &Session, fork: bool) -> Command;
+
+    /// `None` when the session can't be safely opened in this terminal (e.g. it's
+    /// already interactive somewhere else — jumping to that requires a pane
+    /// manager like herdr, not yet supported here).
+    fn attach_command(&self, session: &Session) -> Option<Command>;
+
+    /// `None` when this provider doesn't understand the session's kind well
+    /// enough to fork it safely.
+    fn fork_command(&self, session: &Session) -> Option<Command>;
 }

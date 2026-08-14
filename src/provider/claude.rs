@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use crate::model::Session;
+use crate::model::{Session, SessionKind};
 
 use super::{AgentProvider, ProviderError};
 
@@ -21,13 +21,39 @@ impl AgentProvider for ClaudeProvider {
         parse_sessions(&output.stdout)
     }
 
-    fn resume_command(&self, session: &Session, fork: bool) -> Command {
-        let mut command = Command::new("claude");
-        command.args(["--resume", &session.session_id]);
-        if fork {
-            command.arg("--fork-session");
+    fn attach_command(&self, session: &Session) -> Option<Command> {
+        // `claude --resume` refuses a session that's still running as a background
+        // agent ("Session ... is currently running as a background agent (bg).
+        // Use `claude agents` to find and attach to it, or add --fork-session to
+        // branch off a copy." — observed on a live install). `claude attach <id>`
+        // is the actual command for opening one in this terminal, and it's the
+        // only kind this provider can safely open at all right now: an
+        // `interactive` session is already running in some other terminal, and
+        // jumping to that requires a pane manager like herdr, not implemented here.
+        match session.kind {
+            SessionKind::Background => {
+                let mut command = Command::new("claude");
+                command.args(["attach", &session.id]);
+                Some(command)
+            }
+            SessionKind::Interactive | SessionKind::Unknown => None,
         }
-        command
+    }
+
+    fn fork_command(&self, session: &Session) -> Option<Command> {
+        // Unlike attach, forking a still-running background session is allowed
+        // (per the same error message), and there's no "already open elsewhere"
+        // conflict for `interactive` either — a fork is a brand-new session, not
+        // a takeover. `Unknown` is refused: forking a kind this provider doesn't
+        // recognize at all isn't a call it should make silently.
+        match session.kind {
+            SessionKind::Background | SessionKind::Interactive => {
+                let mut command = Command::new("claude");
+                command.args(["--resume", &session.session_id, "--fork-session"]);
+                Some(command)
+            }
+            SessionKind::Unknown => None,
+        }
     }
 }
 
@@ -176,28 +202,66 @@ mod tests {
         assert!(parse_sessions(b"   \n").unwrap().is_empty());
     }
 
-    #[test]
-    fn resume_command_builds_expected_args() {
-        let session = Session {
+    fn session(kind: SessionKind) -> Session {
+        Session {
             id: "id".into(),
             session_id: "session-id".into(),
             cwd: "/tmp".into(),
-            kind: SessionKind::Background,
+            kind,
             started_at: 0,
             name: "name".into(),
             state: None,
             pid: None,
             status: None,
-        };
+        }
+    }
 
+    #[test]
+    fn attach_command_opens_background_sessions_by_short_id() {
+        let provider = ClaudeProvider;
+        let command = provider
+            .attach_command(&session(SessionKind::Background))
+            .expect("background sessions should be attachable");
+
+        let args: Vec<&str> = command.get_args().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(args, ["attach", "id"]);
+    }
+
+    #[test]
+    fn attach_command_refuses_interactive_and_unknown_sessions() {
+        let provider = ClaudeProvider;
+        assert!(
+            provider
+                .attach_command(&session(SessionKind::Interactive))
+                .is_none()
+        );
+        assert!(
+            provider
+                .attach_command(&session(SessionKind::Unknown))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn fork_command_builds_expected_args_for_background_and_interactive() {
         let provider = ClaudeProvider;
 
-        let resume = provider.resume_command(&session, false);
-        let resume_args: Vec<&str> = resume.get_args().map(|a| a.to_str().unwrap()).collect();
-        assert_eq!(resume_args, ["--resume", "session-id"]);
+        for kind in [SessionKind::Background, SessionKind::Interactive] {
+            let command = provider
+                .fork_command(&session(kind))
+                .unwrap_or_else(|| panic!("{kind:?} sessions should be forkable"));
+            let args: Vec<&str> = command.get_args().map(|a| a.to_str().unwrap()).collect();
+            assert_eq!(args, ["--resume", "session-id", "--fork-session"]);
+        }
+    }
 
-        let fork = provider.resume_command(&session, true);
-        let fork_args: Vec<&str> = fork.get_args().map(|a| a.to_str().unwrap()).collect();
-        assert_eq!(fork_args, ["--resume", "session-id", "--fork-session"]);
+    #[test]
+    fn fork_command_refuses_unknown_sessions() {
+        let provider = ClaudeProvider;
+        assert!(
+            provider
+                .fork_command(&session(SessionKind::Unknown))
+                .is_none()
+        );
     }
 }
