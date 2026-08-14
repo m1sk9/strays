@@ -145,6 +145,7 @@ impl App {
 
     pub fn cancel_new_session_input(&mut self) {
         self.mode = Mode::Normal;
+        self.status_message = None;
         self.input.clear();
         self.input_cursor = 0;
     }

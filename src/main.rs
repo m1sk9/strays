@@ -462,10 +462,12 @@ mod tests {
         let mut app = App::new();
         app.mode = Mode::NewSession;
         app.input = "/tmp".to_string();
+        app.status_message = Some("not a directory: /bad/path".to_string());
 
         handle_key(&mut app, key(KeyCode::Esc));
 
         assert_eq!(app.mode, Mode::Normal);
         assert!(app.input.is_empty());
+        assert!(app.status_message.is_none());
     }
 }
