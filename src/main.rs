@@ -50,3 +50,82 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::model::{Session, SessionKind};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn session(id: &str) -> Session {
+        Session {
+            id: id.to_string(),
+            session_id: id.to_string(),
+            cwd: PathBuf::from("/tmp"),
+            kind: SessionKind::Background,
+            started_at: 0,
+            name: "name".to_string(),
+            state: None,
+            pid: None,
+            status: None,
+        }
+    }
+
+    #[test]
+    fn q_and_esc_quit() {
+        let mut app = App::new();
+        handle_key(&mut app, key(KeyCode::Char('q')));
+        assert!(app.should_quit);
+
+        let mut app = App::new();
+        handle_key(&mut app, key(KeyCode::Esc));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn ctrl_c_quits() {
+        let mut app = App::new();
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn plain_c_does_not_quit() {
+        let mut app = App::new();
+        handle_key(&mut app, key(KeyCode::Char('c')));
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn j_and_down_advance_selection() {
+        let mut app = App::new();
+        app.sessions = vec![session("a"), session("b"), session("c")];
+
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.selected(), Some(0));
+
+        handle_key(&mut app, key(KeyCode::Down));
+        assert_eq!(app.selected(), Some(1));
+    }
+
+    #[test]
+    fn k_and_up_retreat_selection() {
+        let mut app = App::new();
+        app.sessions = vec![session("a"), session("b"), session("c")];
+        handle_key(&mut app, key(KeyCode::Char('j')));
+
+        handle_key(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.selected(), Some(2));
+
+        handle_key(&mut app, key(KeyCode::Up));
+        assert_eq!(app.selected(), Some(1));
+    }
+}
