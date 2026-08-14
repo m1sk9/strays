@@ -73,3 +73,97 @@ impl Default for App {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use super::*;
+    use crate::model::SessionKind;
+    use crate::provider::ProviderError;
+
+    struct FakeProvider {
+        sessions: Vec<Session>,
+    }
+
+    impl AgentProvider for FakeProvider {
+        fn list_sessions(&self) -> Result<Vec<Session>, ProviderError> {
+            Ok(self.sessions.clone())
+        }
+
+        fn resume_command(&self, _session: &Session, _fork: bool) -> Command {
+            Command::new("true")
+        }
+    }
+
+    fn session(id: &str) -> Session {
+        Session {
+            id: id.to_string(),
+            session_id: id.to_string(),
+            cwd: PathBuf::from("/tmp"),
+            kind: SessionKind::Background,
+            started_at: 0,
+            name: "name".to_string(),
+            state: None,
+            pid: None,
+            status: None,
+        }
+    }
+
+    #[test]
+    fn select_next_and_previous_wrap_around() {
+        let mut app = App::new();
+        app.sessions = vec![session("a"), session("b"), session("c")];
+        app.selected_session_id = Some("a".to_string());
+
+        app.select_next();
+        assert_eq!(app.selected(), Some(1));
+        app.select_next();
+        assert_eq!(app.selected(), Some(2));
+        app.select_next();
+        assert_eq!(app.selected(), Some(0));
+
+        app.select_previous();
+        assert_eq!(app.selected(), Some(2));
+    }
+
+    #[test]
+    fn select_on_empty_sessions_does_nothing() {
+        let mut app = App::new();
+        app.select_next();
+        assert_eq!(app.selected(), None);
+        app.select_previous();
+        assert_eq!(app.selected(), None);
+    }
+
+    #[test]
+    fn selected_returns_none_when_session_vanishes() {
+        let mut app = App::new();
+        app.sessions = vec![session("a")];
+        app.selected_session_id = Some("gone".to_string());
+
+        assert_eq!(app.selected(), None);
+    }
+
+    #[test]
+    fn refresh_tracks_selection_by_id_across_reorder() {
+        let mut app = App {
+            provider: Box::new(FakeProvider {
+                sessions: vec![session("a"), session("b")],
+            }),
+            ..App::new()
+        };
+
+        app.refresh();
+        app.selected_session_id = Some("b".to_string());
+        assert_eq!(app.selected(), Some(1));
+
+        app.provider = Box::new(FakeProvider {
+            sessions: vec![session("b"), session("a")],
+        });
+        app.refresh();
+
+        assert_eq!(app.selected(), Some(0));
+    }
+}
