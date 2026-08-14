@@ -12,7 +12,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 use app::App;
 
 fn main() -> io::Result<()> {
-    let mut terminal = ratatui::init();
+    let mut terminal = ratatui::try_init()?;
     let mut app = App::new();
     app.refresh();
 

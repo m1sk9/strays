@@ -6,18 +6,23 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::App;
-use crate::model::{SessionKind, SessionState};
+use crate::model::{SessionKind, SessionState, SessionStatus};
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(frame.area());
 
     let rows = app.sessions.iter().map(|session| {
-        let state_cell = match &session.state {
-            Some(SessionState::Blocked) => {
+        let state_cell = match (&session.state, &session.status) {
+            (Some(SessionState::Blocked), _) => {
                 Cell::from("blocked").style(Style::default().fg(Color::Yellow))
             }
-            Some(SessionState::Other(other)) => Cell::from(other.clone()),
-            None => Cell::from("-"),
+            (Some(SessionState::Other(other)), _) => Cell::from(other.clone()),
+            (None, Some(SessionStatus::Busy)) => {
+                Cell::from("busy").style(Style::default().fg(Color::Cyan))
+            }
+            (None, Some(SessionStatus::Idle)) => Cell::from("idle"),
+            (None, Some(SessionStatus::Other(other))) => Cell::from(other.clone()),
+            (None, None) => Cell::from("-"),
         };
         let kind = match session.kind {
             SessionKind::Background => "background",
@@ -51,9 +56,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .block(Block::default().borders(Borders::ALL).title("strays"));
 
     let mut table_state = TableState::default();
-    if !app.sessions.is_empty() {
-        table_state.select(Some(app.selected));
-    }
+    table_state.select(app.selected());
 
     frame.render_stateful_widget(table, chunks[0], &mut table_state);
 
