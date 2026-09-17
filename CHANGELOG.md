@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1](https://github.com/m1sk9/strays/compare/v0.2.0...v0.2.1) (2026-09-17)
+
+
+### Miscellaneous
+
+* **deps:** update codecov/codecov-action action to v7.1.0 ([#16](https://github.com/m1sk9/strays/issues/16)) ([e003bd0](https://github.com/m1sk9/strays/commit/e003bd0f594b43441632f04e2e0d1413075168c9))
+* **deps:** update codecov/codecov-action action to v7.1.1 ([#18](https://github.com/m1sk9/strays/issues/18)) ([63d1682](https://github.com/m1sk9/strays/commit/63d16820dbbcb00e21963e774390bdd653ef86a9))
+* **deps:** update taiki-e/install-action digest to 9534c84 ([#1](https://github.com/m1sk9/strays/issues/1)) ([75c28ef](https://github.com/m1sk9/strays/commit/75c28efe1d5bdb6401006ff5b57daea40ac3b957))
+
 ## [0.2.0](https://github.com/m1sk9/strays/compare/v0.1.0...v0.2.0) (2026-08-14)
 
 
