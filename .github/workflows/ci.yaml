@@ -53,7 +53,7 @@ jobs:
           prefix-key: "strays/gh-actions-cache"
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2
         with:
           tool: cargo-llvm-cov
 
