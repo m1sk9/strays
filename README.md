@@ -27,9 +27,20 @@ A TUI for Centralized Management of Claude Code.
 
 ## Installation
 
+strays is available on Linux and macOS running on **aarch64**. Not supported on Windows and **Intel-based** macOS. 
+
+### Homebrew
+
+In Homebrew, tap `m1sk9/tap` and then install `m1sk9/tap/strays`.
+
+```shell
+brew tap m1sk9/tap
+brew install m1sk9/tap/strays
+```
+
 ### Rust (crates.io)
 
-strays targets **Linux and macOS**. Windows is not supported.
+You can also install it using `cargo install` if you have a Rust environment on your machine.
 
 ```shell
 cargo install strays
