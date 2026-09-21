@@ -49,8 +49,102 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish
 
-  homebrew:
+  assets:
+    name: assets (${{ matrix.job.target }})
     needs: release-please
+    if: needs.release-please.outputs.release_created
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      # The tag rather than the branch: main can move on while this runs, and an
+      # asset must be built from exactly the source the release points at.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Setup toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          target: ${{ matrix.job.target }}
+
+      # note: In Ubuntu-latest (Ubuntu 24), musl-tools has disappeared, so it must be installed separately.
+      - name: Install musl-gcc
+        if: contains(matrix.job.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.job.target }}
+
+      # The archive name carries no version, so bumping the formula only has to
+      # rewrite the tag in each download url instead of the filename too.
+      - name: Package
+        env:
+          TARGET: ${{ matrix.job.target }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist/strays
+          cp "target/${TARGET}/release/strays" dist/strays/
+          cp LICENSE README.md dist/strays/
+          tar -czf "strays-${TARGET}.tar.gz" -C dist/strays .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: strays-${{ matrix.job.target }}
+          path: strays-${{ matrix.job.target }}.tar.gz
+          if-no-files-found: error
+
+  release-assets:
+    name: attach assets to the release
+    needs:
+      - release-please
+      - assets
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Both shapes, as ripgrep, uv and starship all publish: a per-archive file
+      # is what someone verifying one download reaches for, while the combined
+      # list is what the formula bump reads in a single request.
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+
+          cd dist
+          for archive in *.tar.gz; do
+            sha256sum -- "${archive}" > "${archive}.sha256"
+          done
+          cat -- *.tar.gz.sha256 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attach assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "${TAG}" dist/*.tar.gz dist/*.tar.gz.sha256 dist/SHA256SUMS --clobber
+
+  homebrew:
+    needs:
+      - release-please
+      - release-assets
     if: needs.release-please.outputs.release_created
     runs-on: ubuntu-24.04
     steps:
