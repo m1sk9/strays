@@ -27,7 +27,7 @@ A TUI for Centralized Management of Claude Code.
 
 ## Installation
 
-strays is available on Linux and macOS running on **aarch64**. Not supported on Windows and **Intel-based** macOS. 
+strays runs on Linux (**x86_64** / **aarch64**, glibc and musl) and on **Apple Silicon** macOS. Windows and **Intel-based** macOS are not supported.
 
 ### Homebrew
 
