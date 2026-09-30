@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/m1sk9/strays/compare/v0.3.0...v0.4.0) (2026-09-30)
+
+
+### Features
+
+* focus the herdr pane running an interactive session ([#29](https://github.com/m1sk9/strays/issues/29)) ([e6ffff9](https://github.com/m1sk9/strays/commit/e6ffff9e63a659dc126601768debb3d648b5c30a))
+* install strays as a herdr plugin ([#30](https://github.com/m1sk9/strays/issues/30)) ([91532bd](https://github.com/m1sk9/strays/commit/91532bd13c7869b2c0991d55ea6a0e538dd164fe))
+
 ## [0.3.0](https://github.com/m1sk9/strays/compare/v0.2.0...v0.3.0) (2026-09-21)
 
 
