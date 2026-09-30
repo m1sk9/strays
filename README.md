@@ -46,6 +46,26 @@ You can also install it using `cargo install` if you have a Rust environment on 
 cargo install strays
 ```
 
+### herdr plugin
+
+strays can also be installed as a [herdr](https://herdr.dev) plugin (herdr 0.9.1 or newer). The plugin downloads the prebuilt binary matching its version and falls back to `cargo build` when none is available.
+
+```shell
+herdr plugin install m1sk9/strays
+```
+
+The `open-strays` action opens strays in a new tab. To bind it to a key, add this to `~/.config/herdr/config.toml`:
+
+```toml
+[[keys.command]]
+key = "prefix+ctrl+s"
+type = "shell"
+command = "\"$HERDR_BIN_PATH\" plugin action invoke open-strays --plugin strays"
+description = "open strays"
+```
+
+herdr starts plugin panes without a shell, so strays borrows your login shell's `PATH` (plus `~/.local/bin`) to find `claude`.
+
 ## Usage
 
 Run it from anywhere:
