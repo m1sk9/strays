@@ -20,7 +20,7 @@ A TUI for Centralized Management of Claude Code.
 
 - **Session table**: lists every session `claude agents --json` reports — background and interactive — with state, elapsed time, working directory, and name, color-coded by whether it's blocked, busy, or idle.
 - **Attach**: opens a running background session in the current terminal (`claude attach <id>`).
-- **Focus (herdr)**: for an `interactive` session, pressing `Enter` inside herdr focuses the pane running it (`herdr agent focus`), matched by Claude session id and falling back to `cwd`.
+- **Focus (herdr)**: for an `interactive` session, pressing `Enter` inside herdr focuses the pane running it (`herdr agent focus`), matched by Claude session id.
 - **Fork**: branches a session into a brand-new one via `--fork-session`, leaving the original untouched — works even while the original is still running.
 - **Kill**: ends a stray background session after a confirmation prompt; sessions without a `pid` are shown dimmed since there's nothing to signal.
 - **Open a new session anywhere**: starts a fresh `claude` session in any directory, prefilled with the selected row's `cwd` so reopening the same project is one keystroke.
@@ -61,7 +61,7 @@ strays
 | `j` / `↓` | Move selection down |
 | `k` / `↑` | Move selection up |
 | `r` | Refresh the session list |
-| `Enter` / `o` | Attach to the selected session |
+| `Enter` / `o` | Attach to the selected session (focus its herdr pane if interactive) |
 | `f` | Fork the selected session |
 | `x` | Request to kill the selected session (`y` confirms, any other key cancels) |
 | `n` | Open a new session in a directory (prefilled with the selected row's `cwd`) |

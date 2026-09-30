@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use serde::Deserialize;
@@ -11,7 +11,6 @@ pub enum PaneError {
     Spawn(std::io::Error),
     NonZeroExit(std::process::ExitStatus, String),
     Parse(serde_json::Error),
-    Ambiguous { cwd: PathBuf, count: usize },
 }
 
 impl std::fmt::Display for PaneError {
@@ -22,11 +21,6 @@ impl std::fmt::Display for PaneError {
                 write!(f, "herdr exited with {status}: {}", stderr.trim())
             }
             PaneError::Parse(e) => write!(f, "failed to parse herdr agent list output: {e}"),
-            PaneError::Ambiguous { cwd, count } => write!(
-                f,
-                "{count} herdr panes run claude in {}; can't pick one",
-                cwd.display()
-            ),
         }
     }
 }
@@ -35,7 +29,7 @@ impl std::error::Error for PaneError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             PaneError::Spawn(e) => Some(e),
-            PaneError::NonZeroExit(..) | PaneError::Ambiguous { .. } => None,
+            PaneError::NonZeroExit(..) => None,
             PaneError::Parse(e) => Some(e),
         }
     }
@@ -87,7 +81,7 @@ impl Herdr {
 impl PaneManager for Herdr {
     fn find_pane(&self, session: &Session) -> Result<Option<String>, PaneError> {
         let stdout = self.run(&["agent", "list"])?;
-        select_pane(&parse_agents(&stdout)?, session)
+        Ok(select_pane(&parse_agents(&stdout)?, session))
     }
 
     fn focus_pane(&self, pane_id: &str) -> Result<(), PaneError> {
@@ -117,9 +111,7 @@ struct AgentListResult {
 #[derive(Debug, Clone, Deserialize)]
 struct AgentInfo {
     pane_id: String,
-    agent: Option<String>,
     agent_session: Option<AgentSessionInfo>,
-    cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -145,44 +137,14 @@ fn parse_agents(stdout: &[u8]) -> Result<Vec<AgentInfo>, PaneError> {
         .map_err(PaneError::Parse)
 }
 
-/// Several panes can share a `cwd`, so the session id is tried first and
-/// `cwd` is only a fallback — one that refuses to guess between candidates.
-fn select_pane(agents: &[AgentInfo], session: &Session) -> Result<Option<String>, PaneError> {
-    if let Some(agent) = agents
+/// Matches by session id only. A `cwd` fallback was dropped: when the session
+/// runs in a terminal outside herdr, a lone claude pane in the same directory
+/// is an unrelated session, and focusing it would be silently wrong.
+fn select_pane(agents: &[AgentInfo], session: &Session) -> Option<String> {
+    agents
         .iter()
         .find(|a| a.session_id() == Some(session.session_id.as_str()))
-    {
-        return Ok(Some(agent.pane_id.clone()));
-    }
-
-    let candidates: Vec<&AgentInfo> = agents
-        .iter()
-        .filter(|a| a.agent.as_deref() == Some("claude"))
-        .filter(|a| a.cwd.as_deref().is_some_and(|c| same_dir(c, &session.cwd)))
-        // A pane already known to run a different session can't be this one.
-        .filter(|a| a.session_id().is_none_or(|id| id == session.session_id))
-        .collect();
-
-    match candidates.as_slice() {
-        [] => Ok(None),
-        [one] => Ok(Some(one.pane_id.clone())),
-        many => Err(PaneError::Ambiguous {
-            cwd: session.cwd.clone(),
-            count: many.len(),
-        }),
-    }
-}
-
-/// herdr and Claude Code may spell the same directory differently through a
-/// symlink (`/tmp` vs `/private/tmp` on macOS).
-fn same_dir(a: &Path, b: &Path) -> bool {
-    if a == b {
-        return true;
-    }
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
-    }
+        .map(|a| a.pane_id.clone())
 }
 
 #[cfg(test)]
@@ -203,11 +165,11 @@ mod tests {
          "workspace_id":"w5P"}
     ],"type":"agent_list"}}"##;
 
-    fn session(session_id: &str, cwd: &str) -> Session {
+    fn session(session_id: &str) -> Session {
         Session {
             id: session_id.chars().take(8).collect(),
             session_id: session_id.to_string(),
-            cwd: PathBuf::from(cwd),
+            cwd: PathBuf::from("/work"),
             kind: SessionKind::Interactive,
             started_at: 0,
             name: "name".to_string(),
@@ -217,15 +179,13 @@ mod tests {
         }
     }
 
-    fn agent(pane_id: &str, agent: &str, session: Option<(&str, &str)>, cwd: &str) -> AgentInfo {
+    fn agent(pane_id: &str, session: Option<(&str, &str)>) -> AgentInfo {
         AgentInfo {
             pane_id: pane_id.to_string(),
-            agent: Some(agent.to_string()),
             agent_session: session.map(|(kind, value)| AgentSessionInfo {
                 kind: kind.to_string(),
                 value: value.to_string(),
             }),
-            cwd: Some(PathBuf::from(cwd)),
         }
     }
 
@@ -247,16 +207,10 @@ mod tests {
             agents[0].session_id(),
             Some("f633dbc6-3f3e-4297-a6dd-4f07b3f4b662")
         );
-        assert_eq!(
-            agents[0].cwd.as_deref(),
-            Some(Path::new(
-                "/Users/m1sk9/Repositories/github.com/m1sk9/strays"
-            ))
-        );
     }
 
     #[test]
-    fn parses_agent_with_null_session_and_cwd() {
+    fn parses_agent_with_null_session() {
         let json = r#"{"result":{"agents":[
             {"pane_id":"w1:p1","agent":null,"agent_session":null,"cwd":null}
         ]}}"#;
@@ -265,7 +219,6 @@ mod tests {
 
         assert_eq!(agents[0].pane_id, "w1:p1");
         assert!(agents[0].session_id().is_none());
-        assert!(agents[0].cwd.is_none());
     }
 
     #[test]
@@ -277,90 +230,29 @@ mod tests {
     }
 
     #[test]
-    fn select_pane_prefers_exact_session_id_match_over_cwd() {
+    fn select_pane_finds_the_pane_running_the_session_id() {
         let agents = [
-            agent("w1:p1", "claude", None, "/work"),
-            agent("w1:p2", "claude", Some(("id", "abc")), "/elsewhere"),
+            agent("w1:p1", Some(("id", "other"))),
+            agent("w1:p2", Some(("id", "abc"))),
         ];
 
-        let pane = select_pane(&agents, &session("abc", "/work")).unwrap();
-
-        assert_eq!(pane.as_deref(), Some("w1:p2"));
+        assert_eq!(
+            select_pane(&agents, &session("abc")).as_deref(),
+            Some("w1:p2")
+        );
     }
 
     #[test]
-    fn select_pane_ignores_path_kind_sessions_for_id_match() {
-        let agents = [agent(
-            "w1:p1",
-            "claude",
-            Some(("path", "abc")),
-            "/elsewhere",
-        )];
+    fn select_pane_ignores_path_kind_sessions() {
+        let agents = [agent("w1:p1", Some(("path", "abc")))];
 
-        let pane = select_pane(&agents, &session("abc", "/work")).unwrap();
-
-        assert_eq!(pane, None);
+        assert_eq!(select_pane(&agents, &session("abc")), None);
     }
 
     #[test]
-    fn select_pane_falls_back_to_cwd_for_claude_agents_without_session_id() {
-        let agents = [agent("w1:p1", "claude", None, "/work")];
+    fn select_pane_never_guesses_a_pane_without_a_session_id() {
+        let agents = [agent("w1:p1", None)];
 
-        let pane = select_pane(&agents, &session("abc", "/work")).unwrap();
-
-        assert_eq!(pane.as_deref(), Some("w1:p1"));
-    }
-
-    #[test]
-    fn select_pane_excludes_agents_known_to_run_another_session() {
-        let agents = [
-            agent("w1:p1", "claude", Some(("id", "other")), "/work"),
-            agent("w1:p2", "claude", None, "/work"),
-        ];
-
-        let pane = select_pane(&agents, &session("abc", "/work")).unwrap();
-
-        assert_eq!(pane.as_deref(), Some("w1:p2"));
-    }
-
-    #[test]
-    fn select_pane_ignores_non_claude_agents_in_cwd_fallback() {
-        let agents = [agent("w1:p1", "codex", None, "/work")];
-
-        let pane = select_pane(&agents, &session("abc", "/work")).unwrap();
-
-        assert_eq!(pane, None);
-    }
-
-    #[test]
-    fn select_pane_errors_when_several_panes_share_the_cwd() {
-        let agents = [
-            agent("w1:p1", "claude", None, "/work"),
-            agent("w1:p2", "claude", None, "/work"),
-        ];
-
-        let result = select_pane(&agents, &session("abc", "/work"));
-
-        assert!(matches!(result, Err(PaneError::Ambiguous { count: 2, .. })));
-    }
-
-    #[test]
-    fn select_pane_returns_none_without_any_match() {
-        let agents = [agent(
-            "w1:p1",
-            "claude",
-            Some(("id", "other")),
-            "/elsewhere",
-        )];
-
-        let pane = select_pane(&agents, &session("abc", "/work")).unwrap();
-
-        assert_eq!(pane, None);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn same_dir_resolves_symlinked_tmp_on_macos() {
-        assert!(same_dir(Path::new("/tmp"), Path::new("/private/tmp")));
+        assert_eq!(select_pane(&agents, &session("abc")), None);
     }
 }

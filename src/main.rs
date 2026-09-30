@@ -125,8 +125,7 @@ enum AttachOutcome {
     NoSelection,
     Unavailable(String),
     Ready(std::process::Command),
-    /// A herdr pane id.
-    FocusPane(String),
+    FocusPane { pane_id: String },
 }
 
 /// Decides what attaching/forking the selected session should do, without
@@ -166,7 +165,7 @@ fn resolve_focus(app: &App, session: &Session) -> AttachOutcome {
     };
 
     match pane_manager.find_pane(session) {
-        Ok(Some(pane_id)) => AttachOutcome::FocusPane(pane_id),
+        Ok(Some(pane_id)) => AttachOutcome::FocusPane { pane_id },
         Ok(None) => AttachOutcome::Unavailable(format!(
             "cannot attach: no herdr pane runs session {} ({})",
             session.id,
@@ -200,7 +199,7 @@ fn attach_or_fork(terminal: &mut DefaultTerminal, app: &mut App, fork: bool) -> 
             app.status_message = Some(message);
             return Ok(());
         }
-        AttachOutcome::FocusPane(pane_id) => {
+        AttachOutcome::FocusPane { pane_id } => {
             focus_pane(app, &pane_id);
             return Ok(());
         }
@@ -521,24 +520,21 @@ mod tests {
         focus_fails: bool,
     }
 
-    fn ambiguous() -> PaneError {
-        PaneError::Ambiguous {
-            cwd: "/tmp".into(),
-            count: 2,
-        }
+    fn herdr_failure() -> PaneError {
+        PaneError::Parse(serde_json::from_str::<()>("not json").unwrap_err())
     }
 
     impl PaneManager for FakePaneManager {
         fn find_pane(&self, _session: &Session) -> Result<Option<String>, PaneError> {
             if self.lookup_fails {
-                return Err(ambiguous());
+                return Err(herdr_failure());
             }
             Ok(self.pane.clone())
         }
 
         fn focus_pane(&self, _pane_id: &str) -> Result<(), PaneError> {
             if self.focus_fails {
-                return Err(ambiguous());
+                return Err(herdr_failure());
             }
             Ok(())
         }
@@ -585,7 +581,7 @@ mod tests {
         let app = app_with_selected(SessionKind::Interactive, Some(Box::new(fake)));
 
         match resolve_attach_or_fork(&app, false) {
-            AttachOutcome::FocusPane(pane_id) => assert_eq!(pane_id, "w5P:p1"),
+            AttachOutcome::FocusPane { pane_id } => assert_eq!(pane_id, "w5P:p1"),
             other => panic!("expected FocusPane, got a different outcome: {other:?}"),
         }
     }
@@ -613,7 +609,9 @@ mod tests {
         let app = app_with_selected(SessionKind::Interactive, Some(Box::new(fake)));
 
         match resolve_attach_or_fork(&app, false) {
-            AttachOutcome::Unavailable(message) => assert!(message.contains("can't pick one")),
+            AttachOutcome::Unavailable(message) => {
+                assert!(message.contains("failed to parse herdr agent list output"))
+            }
             other => panic!("expected Unavailable, got a different outcome: {other:?}"),
         }
     }
