@@ -8,6 +8,9 @@
         { "type": "fix", "section": "Bug Fixes" },
         { "type": "chore", "section": "Miscellaneous" },
         { "type": "ci", "section": "CI" }
+      ],
+      "extra-files": [
+        { "type": "toml", "path": "herdr-plugin.toml", "jsonpath": "$.version" }
       ]
     }
   }
