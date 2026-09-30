@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -52,10 +52,20 @@ impl Herdr {
     /// `None` outside a herdr pane. Prefers the `HERDR_BIN_PATH` herdr injects
     /// over a `PATH` lookup, which may resolve to a different install.
     pub fn from_env() -> Option<Self> {
-        if !is_herdr_env(std::env::var_os("HERDR_ENV").as_deref()) {
+        Self::from_env_values(
+            std::env::var_os("HERDR_ENV").as_deref(),
+            std::env::var_os("HERDR_BIN_PATH"),
+        )
+    }
+
+    /// Takes the values instead of reading the variables itself so tests don't
+    /// have to mutate the process environment (`set_var` is unsafe in edition
+    /// 2024, and tests run in parallel).
+    fn from_env_values(herdr_env: Option<&OsStr>, bin_path: Option<OsString>) -> Option<Self> {
+        if herdr_env != Some(OsStr::new("1")) {
             return None;
         }
-        let bin = std::env::var_os("HERDR_BIN_PATH")
+        let bin = bin_path
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("herdr"));
         Some(Self { bin })
@@ -89,13 +99,6 @@ impl PaneManager for Herdr {
         // that takes an arbitrary pane id, across workspaces and tabs.
         self.run(&["agent", "focus", pane_id]).map(|_| ())
     }
-}
-
-/// Takes the value instead of reading the variable itself so tests don't have
-/// to mutate the process environment (`set_var` is unsafe in edition 2024, and
-/// tests run in parallel).
-fn is_herdr_env(value: Option<&OsStr>) -> bool {
-    value == Some(OsStr::new("1"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,6 +152,10 @@ fn select_pane(agents: &[AgentInfo], session: &Session) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::sync::OnceLock;
+
     use super::*;
     use crate::model::SessionKind;
 
@@ -189,12 +196,108 @@ mod tests {
         }
     }
 
+    /// Stands in for the herdr CLI. Every script is written once, before any
+    /// test spawns one: executing a file while another thread still holds it
+    /// open for writing fails with ETXTBSY on Linux.
+    struct FakeHerdr {
+        ok: PathBuf,
+        garbage: PathBuf,
+    }
+
+    fn fake_herdr() -> &'static FakeHerdr {
+        static FAKE: OnceLock<FakeHerdr> = OnceLock::new();
+        FAKE.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("strays-fake-herdr-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let write = |name: &str, body: &str| {
+                let path = dir.join(name);
+                std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+                path
+            };
+            FakeHerdr {
+                ok: write(
+                    "ok",
+                    r#"case "$1 $2 $3" in
+  "agent list ") printf '%s' '{"result":{"agents":[{"pane_id":"w1:p1","agent_session":{"kind":"id","value":"abc"}}]}}' ;;
+  "agent focus w1:p1") ;;
+  *) echo '{"error":{"code":"agent_not_found"}}' >&2; exit 1 ;;
+esac
+"#,
+                ),
+                garbage: write("garbage", "echo not json\n"),
+            }
+        })
+    }
+
+    fn herdr_at(bin: &Path) -> Herdr {
+        Herdr::from_env_values(Some(OsStr::new("1")), Some(bin.into())).unwrap()
+    }
+
     #[test]
-    fn is_herdr_env_only_accepts_one() {
-        assert!(is_herdr_env(Some(OsStr::new("1"))));
-        assert!(!is_herdr_env(None));
-        assert!(!is_herdr_env(Some(OsStr::new("0"))));
-        assert!(!is_herdr_env(Some(OsStr::new(""))));
+    fn from_env_values_requires_herdr_env_to_be_one() {
+        assert!(Herdr::from_env_values(Some(OsStr::new("1")), None).is_some());
+        assert!(Herdr::from_env_values(None, None).is_none());
+        assert!(Herdr::from_env_values(Some(OsStr::new("0")), None).is_none());
+        assert!(Herdr::from_env_values(Some(OsStr::new("")), None).is_none());
+    }
+
+    #[test]
+    fn from_env_values_prefers_herdr_bin_path_over_path_lookup() {
+        let herdr =
+            Herdr::from_env_values(Some(OsStr::new("1")), Some("/opt/herdr".into())).unwrap();
+        assert_eq!(herdr.bin, Path::new("/opt/herdr"));
+
+        let herdr = Herdr::from_env_values(Some(OsStr::new("1")), None).unwrap();
+        assert_eq!(herdr.bin, Path::new("herdr"));
+    }
+
+    #[test]
+    fn find_pane_matches_the_session_in_herdr_agent_list() {
+        let herdr = herdr_at(&fake_herdr().ok);
+
+        assert_eq!(
+            herdr.find_pane(&session("abc")).unwrap().as_deref(),
+            Some("w1:p1")
+        );
+        assert_eq!(herdr.find_pane(&session("other")).unwrap(), None);
+    }
+
+    #[test]
+    fn find_pane_reports_unparsable_agent_list_output() {
+        let herdr = herdr_at(&fake_herdr().garbage);
+
+        assert!(matches!(
+            herdr.find_pane(&session("abc")),
+            Err(PaneError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn focus_pane_runs_herdr_agent_focus() {
+        let herdr = herdr_at(&fake_herdr().ok);
+
+        assert!(herdr.focus_pane("w1:p1").is_ok());
+    }
+
+    #[test]
+    fn focus_pane_reports_herdr_stderr_on_failure() {
+        let herdr = herdr_at(&fake_herdr().ok);
+
+        let err = herdr.focus_pane("w9:p9").unwrap_err();
+
+        assert!(matches!(err, PaneError::NonZeroExit(..)));
+        assert!(err.to_string().contains("agent_not_found"));
+    }
+
+    #[test]
+    fn missing_herdr_binary_is_a_spawn_error() {
+        let herdr = herdr_at(Path::new("/definitely/not/a/real/herdr"));
+
+        assert!(matches!(
+            herdr.focus_pane("w1:p1"),
+            Err(PaneError::Spawn(_))
+        ));
     }
 
     #[test]
