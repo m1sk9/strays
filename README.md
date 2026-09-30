@@ -9,11 +9,10 @@ A TUI for Centralized Management of Claude Code.
 
 ## Todo
 
-- [ ] herdr integration: match sessions to herdr panes by `cwd` and focus them with `zoom --on/--off`
 - [ ] Transcript preview pane (tail of the session's JSONL)
 - [ ] Search and resume completed/past sessions (`--all`, scanning `~/.claude/projects/`)
 - [ ] Bulk cleanup: sort stray sessions by age and kill several at once
-- [ ] Asynchronous `App::refresh()` so a slow `claude agents --json` can't freeze the event loop
+- [ ] Asynchronous `App::refresh()` so a slow `claude agents --json` can't freeze the event loop (also covers `herdr agent list` at focus time)
 - [ ] Bracketed paste support for the new-session path input
 - [ ] Grapheme-cluster aware cursor movement (currently Unicode scalar values)
 
@@ -21,6 +20,7 @@ A TUI for Centralized Management of Claude Code.
 
 - **Session table**: lists every session `claude agents --json` reports — background and interactive — with state, elapsed time, working directory, and name, color-coded by whether it's blocked, busy, or idle.
 - **Attach**: opens a running background session in the current terminal (`claude attach <id>`).
+- **Focus (herdr)**: for an `interactive` session, pressing `Enter` inside herdr focuses the pane running it (`herdr agent focus`), matched by Claude session id and falling back to `cwd`.
 - **Fork**: branches a session into a brand-new one via `--fork-session`, leaving the original untouched — works even while the original is still running.
 - **Kill**: ends a stray background session after a confirmation prompt; sessions without a `pid` are shown dimmed since there's nothing to signal.
 - **Open a new session anywhere**: starts a fresh `claude` session in any directory, prefilled with the selected row's `cwd` so reopening the same project is one keystroke.
@@ -67,7 +67,7 @@ strays
 | `n` | Open a new session in a directory (prefilled with the selected row's `cwd`) |
 | `q` / `Esc` / `Ctrl-C` | Quit |
 
-Only `background`-kind sessions can be attached to directly — an `interactive` session is already open in some other terminal, and jumping to that needs a pane manager like herdr (see Todo).
+`background` sessions are attached in place. An `interactive` session is already open in another terminal; when strays runs inside herdr (`HERDR_ENV=1`) it focuses that pane instead, otherwise it shows an inline message.
 
 ## LICENSE
 

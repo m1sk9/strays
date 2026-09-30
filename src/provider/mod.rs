@@ -42,8 +42,8 @@ pub trait AgentProvider {
     fn list_sessions(&self) -> Result<Vec<Session>, ProviderError>;
 
     /// `None` when the session can't be safely opened in this terminal (e.g. it's
-    /// already interactive somewhere else — jumping to that requires a pane
-    /// manager like herdr, not yet supported here).
+    /// already interactive somewhere else — the caller may focus its pane via
+    /// `herdr::PaneManager` instead).
     fn attach_command(&self, session: &Session) -> Option<Command>;
 
     /// `None` when this provider doesn't understand the session's kind well
