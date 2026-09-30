@@ -14,6 +14,19 @@ out="$root/bin/strays"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+install_binary() {
+  # Renamed into place instead of copied over: a running strays pins the old
+  # inode, which Linux refuses to write to (ETXTBSY) and which macOS kills on
+  # the next launch once its pages no longer match the cached code signature.
+  mkdir -p "$root/bin" &&
+    cp "$1" "$out.tmp" &&
+    chmod +x "$out.tmp" &&
+    mv -f "$out.tmp" "$out" && return 0
+  rm -f "$out.tmp"
+  echo "strays: could not install the binary at $out." >&2
+  return 1
+}
+
 build_from_source() {
   # herdr may be launched without ~/.cargo/bin on PATH.
   [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
@@ -22,8 +35,7 @@ build_from_source() {
     exit 1
   fi
   (cd "$root" && cargo build --release --locked) || exit 1
-  mkdir -p "$root/bin"
-  cp "$root/target/release/strays" "$out"
+  install_binary "$root/target/release/strays" || exit 1
   exit 0
 }
 
@@ -35,9 +47,9 @@ fallback() {
 
 download() {
   if have curl; then
-    curl -fsSL -o "$2" "$1"
+    curl -fsSL --connect-timeout 15 -o "$2" "$1"
   elif have wget; then
-    wget -q -O "$2" "$1"
+    wget -q --timeout=15 -O "$2" "$1"
   else
     return 1
   fi
@@ -77,6 +89,7 @@ actual=$(sha256_of "$tmp/$archive") || fallback "no sha256sum or shasum to verif
 [ -n "$expected" ] && [ "$expected" = "$actual" ] || fallback "checksum mismatch for $archive"
 
 tar -xzf "$tmp/$archive" -C "$tmp" || fallback "could not extract $archive"
-mkdir -p "$root/bin"
-mv "$tmp/strays" "$out" && chmod +x "$out"
+install_binary "$tmp/strays"
+status=$?
 rm -rf "$tmp"
+exit "$status"
