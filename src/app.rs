@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::action;
+use crate::herdr::PaneManager;
 use crate::model::Session;
 use crate::provider::{AgentProvider, ClaudeProvider};
 
@@ -23,6 +24,7 @@ pub struct App {
     pub input_cursor: usize,
     selected_session_id: Option<String>,
     provider: Box<dyn AgentProvider>,
+    pane_manager: Option<Box<dyn PaneManager>>,
 }
 
 impl App {
@@ -36,7 +38,19 @@ impl App {
             input_cursor: 0,
             selected_session_id: None,
             provider: Box::new(ClaudeProvider),
+            pane_manager: None,
         }
+    }
+
+    /// Kept out of `new()` so tests that build an `App` never reach a real
+    /// herdr just because they happen to run inside a herdr pane.
+    pub fn with_pane_manager(mut self, pane_manager: Box<dyn PaneManager>) -> Self {
+        self.pane_manager = Some(pane_manager);
+        self
+    }
+
+    pub fn pane_manager(&self) -> Option<&dyn PaneManager> {
+        self.pane_manager.as_deref()
     }
 
     pub fn refresh(&mut self) {

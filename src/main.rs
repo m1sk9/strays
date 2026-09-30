@@ -1,5 +1,6 @@
 mod action;
 mod app;
+mod herdr;
 mod model;
 mod provider;
 mod ui;
@@ -13,6 +14,8 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use app::{App, Mode};
+use herdr::Herdr;
+use model::{Session, SessionKind};
 
 const HELP: &str = "\
 strays - a TUI for centralized management of LLM agents running on machines.
@@ -26,7 +29,7 @@ Keybindings:
   j, Down             Move selection down
   k, Up               Move selection up
   r                   Refresh the session list
-  Enter, o            Attach to the selected session
+  Enter, o            Attach to the selected session (focus its herdr pane if interactive)
   f                   Fork the selected session
   x                   Request to kill the selected session (y confirms)
   n                   Open a new session in a directory
@@ -72,6 +75,9 @@ fn main() -> io::Result<()> {
 
     let mut terminal = ratatui::try_init()?;
     let mut app = App::new();
+    if let Some(herdr) = Herdr::from_env() {
+        app = app.with_pane_manager(Box::new(herdr));
+    }
     app.refresh();
 
     let result = run(&mut terminal, &mut app);
@@ -117,13 +123,16 @@ fn exec_and_recover(
 #[derive(Debug)]
 enum AttachOutcome {
     NoSelection,
-    Unavailable(&'static str),
+    Unavailable(String),
     Ready(std::process::Command),
+    FocusPane { pane_id: String },
 }
 
 /// Decides what attaching/forking the selected session should do, without
 /// touching the terminal — kept separate from `attach_or_fork` so this can be
 /// tested without a real `DefaultTerminal` (`ratatui::init()` needs a real TTY).
+/// It may still query herdr for an interactive session's pane, which doesn't
+/// touch the terminal either.
 fn resolve_attach_or_fork(app: &App, fork: bool) -> AttachOutcome {
     let Some(session) = app.selected_session() else {
         return AttachOutcome::NoSelection;
@@ -137,11 +146,44 @@ fn resolve_attach_or_fork(app: &App, fork: bool) -> AttachOutcome {
 
     match command {
         Some(command) => AttachOutcome::Ready(command),
-        None if fork => AttachOutcome::Unavailable("cannot fork: unrecognized session kind"),
-        None => AttachOutcome::Unavailable(
-            "cannot attach: session is interactive elsewhere (needs a pane manager like herdr, not yet supported)",
-        ),
+        None if fork => {
+            AttachOutcome::Unavailable("cannot fork: unrecognized session kind".to_string())
+        }
+        None => match session.kind {
+            SessionKind::Interactive => resolve_focus(app, session),
+            _ => AttachOutcome::Unavailable("cannot attach: unrecognized session kind".to_string()),
+        },
     }
+}
+
+fn resolve_focus(app: &App, session: &Session) -> AttachOutcome {
+    let Some(pane_manager) = app.pane_manager() else {
+        return AttachOutcome::Unavailable(
+            "cannot attach: session is interactive in another terminal (run strays inside herdr to focus it)"
+                .to_string(),
+        );
+    };
+
+    match pane_manager.find_pane(session) {
+        Ok(Some(pane_id)) => AttachOutcome::FocusPane { pane_id },
+        Ok(None) => AttachOutcome::Unavailable(format!(
+            "cannot attach: no herdr pane runs session {} ({})",
+            session.id,
+            session.cwd.display()
+        )),
+        Err(err) => AttachOutcome::Unavailable(format!("cannot attach: {err}")),
+    }
+}
+
+/// Unlike attach/fork this is not an exec replacement: strays keeps running so
+/// its pane stays useful as a dashboard once the human comes back.
+fn focus_pane(app: &mut App, pane_id: &str) {
+    let result = app.pane_manager().map(|pm| pm.focus_pane(pane_id));
+    app.status_message = Some(match result {
+        Some(Ok(())) => format!("focused herdr pane {pane_id}"),
+        Some(Err(err)) => format!("failed to focus herdr pane {pane_id}: {err}"),
+        None => "cannot focus: herdr is not available".to_string(),
+    });
 }
 
 /// Runs `claude` in place of the current process (attach when `fork` is false,
@@ -154,7 +196,11 @@ fn attach_or_fork(terminal: &mut DefaultTerminal, app: &mut App, fork: bool) -> 
             return Ok(());
         }
         AttachOutcome::Unavailable(message) => {
-            app.status_message = Some(message.to_string());
+            app.status_message = Some(message);
+            return Ok(());
+        }
+        AttachOutcome::FocusPane { pane_id } => {
+            focus_pane(app, &pane_id);
             return Ok(());
         }
         AttachOutcome::Ready(command) => command,
@@ -245,7 +291,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::model::{Session, SessionKind};
+    use crate::herdr::{PaneError, PaneManager};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -467,16 +513,168 @@ mod tests {
         }
     }
 
-    #[test]
-    fn resolve_attach_or_fork_refuses_attach_for_interactive_sessions() {
-        let mut app = App::new();
-        app.sessions = vec![session_with_kind("a", SessionKind::Interactive)];
-        handle_key(&mut app, key(KeyCode::Char('j')));
+    #[derive(Default)]
+    struct FakePaneManager {
+        pane: Option<String>,
+        lookup_fails: bool,
+        focus_fails: bool,
+    }
 
-        assert!(matches!(
-            resolve_attach_or_fork(&app, false),
-            AttachOutcome::Unavailable(_)
-        ));
+    fn herdr_failure() -> PaneError {
+        PaneError::Parse(serde_json::from_str::<()>("not json").unwrap_err())
+    }
+
+    impl PaneManager for FakePaneManager {
+        fn find_pane(&self, _session: &Session) -> Result<Option<String>, PaneError> {
+            if self.lookup_fails {
+                return Err(herdr_failure());
+            }
+            Ok(self.pane.clone())
+        }
+
+        fn focus_pane(&self, _pane_id: &str) -> Result<(), PaneError> {
+            if self.focus_fails {
+                return Err(herdr_failure());
+            }
+            Ok(())
+        }
+    }
+
+    struct UnreachablePaneManager;
+
+    impl PaneManager for UnreachablePaneManager {
+        fn find_pane(&self, _session: &Session) -> Result<Option<String>, PaneError> {
+            panic!("herdr must not be consulted");
+        }
+
+        fn focus_pane(&self, _pane_id: &str) -> Result<(), PaneError> {
+            panic!("herdr must not be consulted");
+        }
+    }
+
+    fn app_with_selected(kind: SessionKind, pane_manager: Option<Box<dyn PaneManager>>) -> App {
+        let mut app = App::new();
+        if let Some(pane_manager) = pane_manager {
+            app = app.with_pane_manager(pane_manager);
+        }
+        app.sessions = vec![session_with_kind("a", kind)];
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        app
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_refuses_interactive_attach_without_pane_manager() {
+        let app = app_with_selected(SessionKind::Interactive, None);
+
+        match resolve_attach_or_fork(&app, false) {
+            AttachOutcome::Unavailable(message) => assert!(message.contains("herdr")),
+            other => panic!("expected Unavailable, got a different outcome: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_focuses_the_pane_running_an_interactive_session() {
+        let fake = FakePaneManager {
+            pane: Some("w5P:p1".to_string()),
+            ..Default::default()
+        };
+        let app = app_with_selected(SessionKind::Interactive, Some(Box::new(fake)));
+
+        match resolve_attach_or_fork(&app, false) {
+            AttachOutcome::FocusPane { pane_id } => assert_eq!(pane_id, "w5P:p1"),
+            other => panic!("expected FocusPane, got a different outcome: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_reports_when_no_pane_runs_the_session() {
+        let fake = FakePaneManager::default();
+        let app = app_with_selected(SessionKind::Interactive, Some(Box::new(fake)));
+
+        match resolve_attach_or_fork(&app, false) {
+            AttachOutcome::Unavailable(message) => {
+                assert!(message.contains("session a"));
+                assert!(message.contains("/tmp"));
+            }
+            other => panic!("expected Unavailable, got a different outcome: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_reports_pane_lookup_errors() {
+        let fake = FakePaneManager {
+            lookup_fails: true,
+            ..Default::default()
+        };
+        let app = app_with_selected(SessionKind::Interactive, Some(Box::new(fake)));
+
+        match resolve_attach_or_fork(&app, false) {
+            AttachOutcome::Unavailable(message) => {
+                assert!(message.contains("failed to parse herdr agent list output"))
+            }
+            other => panic!("expected Unavailable, got a different outcome: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_never_consults_herdr_for_background_sessions() {
+        let app = app_with_selected(
+            SessionKind::Background,
+            Some(Box::new(UnreachablePaneManager)),
+        );
+
+        match resolve_attach_or_fork(&app, false) {
+            AttachOutcome::Ready(command) => assert_eq!(args_of(&command), ["attach", "a"]),
+            other => panic!("expected Ready, got a different outcome: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_attach_or_fork_refuses_attach_for_unknown_kind() {
+        let app = app_with_selected(SessionKind::Unknown, None);
+
+        match resolve_attach_or_fork(&app, false) {
+            AttachOutcome::Unavailable(message) => assert!(message.contains("unrecognized")),
+            other => panic!("expected Unavailable, got a different outcome: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn focus_pane_reports_success_in_the_status_message() {
+        let mut app = App::new().with_pane_manager(Box::new(FakePaneManager::default()));
+
+        focus_pane(&mut app, "w5P:p1");
+
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("focused herdr pane w5P:p1")
+        );
+    }
+
+    #[test]
+    fn focus_pane_reports_failure_in_the_status_message() {
+        let fake = FakePaneManager {
+            focus_fails: true,
+            ..Default::default()
+        };
+        let mut app = App::new().with_pane_manager(Box::new(fake));
+
+        focus_pane(&mut app, "w5P:p1");
+
+        assert!(
+            app.status_message
+                .unwrap()
+                .contains("failed to focus herdr pane")
+        );
+    }
+
+    #[test]
+    fn focus_pane_without_pane_manager_reports_inline() {
+        let mut app = App::new();
+
+        focus_pane(&mut app, "w5P:p1");
+
+        assert!(app.status_message.unwrap().contains("cannot focus"));
     }
 
     #[test]

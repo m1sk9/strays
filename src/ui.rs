@@ -63,7 +63,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         Mode::NewSession => new_session_status(&app.input, app.status_message.as_deref()),
         Mode::Normal => app.status_message.clone().unwrap_or_else(|| {
-            "q: quit  j/k: move  r: refresh  enter/o: attach  f: fork  x: kill  n: new".to_string()
+            "q: quit  j/k: move  r: refresh  enter/o: attach/focus  f: fork  x: kill  n: new"
+                .to_string()
         }),
     };
     frame.render_widget(Paragraph::new(status), chunks[1]);

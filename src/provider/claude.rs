@@ -29,8 +29,8 @@ impl AgentProvider for ClaudeProvider {
         // branch off a copy." — observed on a live install). `claude attach <id>`
         // is the actual command for opening one in this terminal, and it's the
         // only kind this provider can safely open at all right now: an
-        // `interactive` session is already running in some other terminal, and
-        // jumping to that requires a pane manager like herdr, not implemented here.
+        // `interactive` session is already running in some other terminal, so
+        // `main.rs` focuses its herdr pane instead of opening it here.
         match session.kind {
             SessionKind::Background => {
                 let mut command = Command::new("claude");
