@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/m1sk9/strays/compare/v0.4.0...v0.4.1) (2026-10-11)
+
+
+### Miscellaneous
+
+* **deps:** update rust crate serde_json to v1.0.152 ([#34](https://github.com/m1sk9/strays/issues/34)) ([358dbe7](https://github.com/m1sk9/strays/commit/358dbe725fed8b48a62a46d65fe732748984275e))
+* **deps:** update rust crate serde_json to v1.0.154 ([#36](https://github.com/m1sk9/strays/issues/36)) ([32e70e0](https://github.com/m1sk9/strays/commit/32e70e0dc83b43117aa53ff41a23ceb8f91e8d74))
+
 ## [0.4.0](https://github.com/m1sk9/strays/compare/v0.3.0...v0.4.0) (2026-09-30)
 
 
