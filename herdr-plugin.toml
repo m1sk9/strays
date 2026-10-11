@@ -1,6 +1,6 @@
 id = "strays"
 name = "strays"
-version = "0.4.0"
+version = "0.4.1"
 description = "A TUI for Centralized Management of Claude Code, opened in its own herdr tab."
 # The oldest server that `agent focus` and `agent_session` were verified against.
 min_herdr_version = "0.9.1"
